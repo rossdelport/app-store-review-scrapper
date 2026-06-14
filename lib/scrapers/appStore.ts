@@ -26,7 +26,7 @@ export async function searchAppStore(
   country: string,
 ): Promise<AppResult[]> {
   const url =
-    `https://itunes.apple.com/search?media=software&entity=software&limit=8` +
+    `https://itunes.apple.com/search?media=software&entity=software&limit=20` +
     `&country=${encodeURIComponent(country.toLowerCase())}&term=${encodeURIComponent(term)}`;
 
   const res = await fetch(url, fetchOpts({ Accept: "application/json" }));
@@ -41,6 +41,11 @@ export async function searchAppStore(
       icon: a.artworkUrl100 || a.artworkUrl60 || "",
       url: a.trackViewUrl,
       score: a.averageUserRating,
+      ratingCount: a.userRatingCount,
+      genre: a.primaryGenreName,
+      price: a.formattedPrice || (a.price === 0 ? "Free" : undefined),
+      free: a.price === 0,
+      released: a.releaseDate,
       store: "appstore",
     }),
   );

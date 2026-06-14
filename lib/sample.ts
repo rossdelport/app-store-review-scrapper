@@ -1,34 +1,47 @@
 import type { AppResult, Review } from "./types";
 
-/** A demo app + reviews so the UI is fully usable without live network access
- *  (handy for local dev, screenshots, or restricted hosting). */
-export const SAMPLE_APP: AppResult = {
-  id: "com.example.sample",
-  title: "Sample Notes App",
-  developer: "Demo Labs",
-  icon: "",
-  url: "#",
-  score: 4.3,
-  store: "googleplay",
-};
-
-export const SAMPLE_REVIEWS: Review[] = [
-  { id: "s1", rating: 5, text: "Absolutely love this app. Syncing across my phone and laptop is instant and I've never lost a note." },
-  { id: "s2", rating: 4, text: "Great for quick notes. Would be five stars if there was a proper dark mode on tablet." },
-  { id: "s3", rating: 2, text: "Crashes every time I try to attach a photo since the last update. Please fix!" },
-  { id: "s4", rating: 5, text: "The search is lightning fast and the widgets are genuinely useful. Best note app I've tried." },
-  { id: "s5", rating: 1, text: "They moved basic features behind a subscription. Used to be my favourite, now uninstalling." },
-  { id: "s6", rating: 3, text: "It's fine. Does what it says but the interface feels a little dated compared to competitors." },
-  { id: "s7", rating: 5, text: "Customer support actually replied within an hour and fixed my sync issue. Very impressed." },
-  { id: "s8", rating: 4, text: "Handwriting recognition is surprisingly accurate. Battery use could be a bit lower though." },
-  { id: "s9", rating: 2, text: "Notifications stopped working on Android 14. Reinstalled twice with no luck." },
-  { id: "s10", rating: 5, text: "Clean, fast, no ads on the free tier. Exactly what I wanted from a notes app." },
-  { id: "s11", rating: 3, text: "Decent but the export options are limited. I really need PDF export with formatting." },
-  { id: "s12", rating: 4, text: "Folders and tags make organising hundreds of notes painless. Solid update this month." },
-  { id: "s13", rating: 1, text: "Lost two weeks of notes after a forced logout. No way to recover them. Be careful." },
-  { id: "s14", rating: 5, text: "Offline mode is rock solid on the train. Everything syncs the moment I get signal again." },
-  { id: "s15", rating: 4, text: "Reminders tied to notes are a game changer for my workflow. Nicely done." },
-  { id: "s16", rating: 2, text: "The new layout buried the most-used buttons under a menu. Please bring back the toolbar." },
-  { id: "s17", rating: 5, text: "Migrated from a competitor and the import just worked. Zero data loss, huge relief." },
-  { id: "s18", rating: 3, text: "Good app overall, but it drains my battery noticeably when background sync is on." },
+/** Demo apps for both columns so the full flow works without network access. */
+export const SAMPLE_APPSTORE_APPS: AppResult[] = [
+  { id: "sa1", title: "Bookshelf", developer: "VitalSource Technologies", icon: "", url: "#", score: 4.7, ratingCount: 78000, genre: "Education", price: "Free", free: true, released: "2010-02-03", store: "appstore" },
+  { id: "sa2", title: "Bookshelf — Your virtual library", developer: "SquidBit d.o.o.", icon: "", url: "#", score: 4.8, ratingCount: 2800, genre: "Book", price: "Free", free: true, released: "2018-05-01", store: "appstore" },
+  { id: "sa3", title: "Bookshelf: Book Tracker & List", developer: "Alexander Gerrese", icon: "", url: "#", score: 4.6, ratingCount: 4000, genre: "Book", price: "Free", free: true, released: "2019-08-12", store: "appstore" },
+  { id: "sa4", title: "TBR — Bookshelf", developer: "TBR - Bookshelf, LLC", icon: "", url: "#", score: 4.5, ratingCount: 4300, genre: "Book", price: "Free", free: true, released: "2021-01-20", store: "appstore" },
+  { id: "sa5", title: "Goodreads", developer: "Goodreads", icon: "", url: "#", score: 4.8, ratingCount: 730000, genre: "Book", price: "Free", free: true, released: "2010-01-01", store: "appstore" },
+  { id: "sa6", title: "Apple Books", developer: "Apple", icon: "", url: "#", score: 4.4, ratingCount: 81700, genre: "Book", price: "Free", free: true, released: "2010-04-02", store: "appstore" },
 ];
+
+export const SAMPLE_GOOGLEPLAY_APPS: AppResult[] = [
+  { id: "com.squidbit.bookshelf", title: "Bookshelf — Your virtual library", developer: "SquidBit", icon: "", url: "#", score: 4.6, ratingCount: 1500, installs: "1M+", genre: "Books & Reference", price: "Free", free: true, store: "googleplay" },
+  { id: "com.tcreations.bookshelf", title: "Bookshelf", developer: "T.creations", icon: "", url: "#", score: 4.2, ratingCount: 16, installs: "50K+", genre: "Books & Reference", price: "Free", free: true, store: "googleplay" },
+  { id: "com.deseretbook.bookshelf", title: "Deseret Bookshelf", developer: "Deseret Book", icon: "", url: "#", score: 4.8, ratingCount: 1100, installs: "500K+", genre: "Books & Reference", price: "Free", free: true, store: "googleplay" },
+  { id: "com.goodreads", title: "Goodreads", developer: "Goodreads", icon: "", url: "#", score: 4.6, ratingCount: 12000, installs: "10M+", genre: "Books & Reference", price: "Free", free: true, store: "googleplay" },
+  { id: "com.handylibrary", title: "Handy Library — Book Organizer", developer: "Bookshare Co., Ltd", icon: "", url: "#", score: 4.0, ratingCount: 770, installs: "1M+", genre: "Books & Reference", price: "Free", free: true, store: "googleplay" },
+];
+
+const SAMPLE_TEXTS = [
+  "Absolutely love this app, syncing across devices is instant.",
+  "Great for quick notes but needs a proper dark mode.",
+  "Crashes every time I attach a photo since the last update.",
+  "Search is lightning fast and the widgets are genuinely useful.",
+  "They moved basic features behind a subscription. Uninstalling.",
+  "It's fine, does what it says but the interface feels dated.",
+  "Customer support replied within an hour and fixed my issue.",
+  "Offline mode is rock solid on the train. Highly recommend.",
+  "Lost two weeks of notes after a forced logout. Be careful.",
+  "Clean, fast, no ads on the free tier. Exactly what I wanted.",
+];
+
+/** Deterministic-ish mock reviews for a given app/country in demo mode. */
+export function mockReviews(seed: number): Review[] {
+  const n = 4 + (seed % 9); // 4–12 reviews
+  const out: Review[] = [];
+  for (let i = 0; i < n; i++) {
+    const idx = (seed * 7 + i * 3) % SAMPLE_TEXTS.length;
+    out.push({
+      id: `${seed}-${i}`,
+      rating: 1 + ((seed + i) % 5),
+      text: SAMPLE_TEXTS[idx],
+    });
+  }
+  return out;
+}
