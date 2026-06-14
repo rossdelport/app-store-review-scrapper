@@ -9,6 +9,8 @@ export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 export async function POST(req: Request) {
+  const debug = new URL(req.url).searchParams.get("debug") === "1";
+
   try {
     const body = await req.json();
     const store = body.store as Store;
@@ -30,8 +32,22 @@ export async function POST(req: Request) {
         ? await searchAppStore(term, country)
         : await searchGooglePlay(term, country);
 
-    return NextResponse.json({ results });
+    console.log(
+      `[search] store=${store} term="${term}" country=${country} -> ${results.length} results`,
+    );
+
+    return NextResponse.json({
+      results,
+      ...(debug ? { debug: { store, term, country, count: results.length } } : {}),
+    });
   } catch (e) {
-    return NextResponse.json({ error: friendlyError(e) }, { status: 502 });
+    console.error("[search] error:", e);
+    return NextResponse.json(
+      {
+        error: friendlyError(e),
+        ...(debug ? { debug: { raw: e instanceof Error ? e.message : String(e) } } : {}),
+      },
+      { status: 502 },
+    );
   }
 }
