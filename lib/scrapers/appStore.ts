@@ -1,21 +1,22 @@
 import type { AppResult, Review } from "../types";
 import { fetchDispatcher } from "../proxy";
 
-// A desktop UA + language keeps Apple's public endpoints from rejecting the request.
-const UA =
+const SAFARI_UA =
   "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 " +
   "(KHTML, like Gecko) Version/16.0 Safari/605.1.15";
 
-const baseHeaders = {
-  "User-Agent": UA,
-  Accept: "application/json",
-  "Accept-Language": "en-US,en;q=0.9",
-};
-
-// fetch() options incl. the optional proxy dispatcher (typed loosely because
-// `dispatcher` isn't in the lib DOM RequestInit).
-function fetchOpts(): any {
-  return { headers: baseHeaders, cache: "no-store", dispatcher: fetchDispatcher() };
+/** Build fetch() options incl. headers and the optional proxy dispatcher
+ *  (typed loosely because `dispatcher` isn't in the lib DOM RequestInit). */
+function fetchOpts(extraHeaders: Record<string, string> = {}): any {
+  return {
+    headers: {
+      "User-Agent": SAFARI_UA,
+      "Accept-Language": "en-US,en;q=0.9",
+      ...extraHeaders,
+    },
+    cache: "no-store",
+    dispatcher: fetchDispatcher(),
+  };
 }
 
 /** Search the App Store via the public iTunes Search API. */
@@ -27,7 +28,7 @@ export async function searchAppStore(
     `https://itunes.apple.com/search?media=software&entity=software&limit=8` +
     `&country=${encodeURIComponent(country.toLowerCase())}&term=${encodeURIComponent(term)}`;
 
-  const res = await fetch(url, fetchOpts());
+  const res = await fetch(url, fetchOpts({ Accept: "application/json" }));
   if (!res.ok) throw new Error(`App Store search failed (HTTP ${res.status})`);
 
   const json = await res.json();
@@ -45,75 +46,108 @@ export async function searchAppStore(
 }
 
 /**
- * Parse one page of Apple's customer-reviews JSON feed into Review objects.
- * Pure (no I/O) so it can be unit-tested. Skips the app-info entry Apple
- * sometimes prepends (it has no `im:rating`).
+ * The App Store website calls a private "AMP" API for reviews, authenticated
+ * with a bearer token embedded in every apps.apple.com page. Fetch an app's
+ * page and pull that token out. (The old itunes.apple.com RSS reviews feed now
+ * returns an empty feed, so this is the reliable path.)
  */
-export function parseAppStoreFeed(json: any): Review[] {
-  const entry = json?.feed?.entry;
-  if (!entry) return [];
-  const list: any[] = Array.isArray(entry) ? entry : [entry];
-
-  const reviews: Review[] = [];
-  for (let i = 0; i < list.length; i++) {
-    const e = list[i];
-    const rating = e?.["im:rating"]?.label;
-
-    // `content` is usually { label }, but can be an array of typed contents.
-    let content: string | undefined = e?.content?.label;
-    if (content == null && Array.isArray(e?.content)) {
-      content = e.content.find((c: any) => c?.label)?.label;
-    }
-
-    if (rating == null || content == null) continue;
-
-    reviews.push({
-      id: String(e?.id?.label ?? `${i}`),
-      rating: Number(rating) || 0,
-      text: String(content).trim(),
-    });
+export async function getStorefrontToken(
+  country: string,
+  appId: string,
+): Promise<string> {
+  const pageUrl = `https://apps.apple.com/${country.toLowerCase()}/app/id${appId}`;
+  const res = await fetch(pageUrl, fetchOpts({ Accept: "text/html" }));
+  if (!res.ok) {
+    throw new Error(`Couldn't load the App Store page (HTTP ${res.status})`);
   }
-  return reviews;
+  const html = await res.text();
+
+  // Preferred: token sits in a URL-encoded JSON meta tag.
+  const meta = html.match(
+    /<meta[^>]+name="web-experience-app\/config\/environment"[^>]+content="([^"]+)"/,
+  );
+  if (meta) {
+    const decoded = decodeURIComponent(meta[1]);
+    const t = decoded.match(/"token"\s*:\s*"([^"]+)"/);
+    if (t) return t[1];
+  }
+
+  // Fallback: grab any JWT-looking string from the page.
+  const jwt = html.match(/eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+/);
+  if (jwt) return jwt[0];
+
+  throw new Error("Couldn't find the App Store API token on the page.");
 }
 
-/**
- * Pull reviews from Apple's public customer-reviews RSS feed (JSON variant).
- * The feed is paginated (1..10, ~50 reviews per page); we read a handful of
- * pages so we get a solid sample without hammering the endpoint.
- */
+/** One page of the AMP reviews API. Returns the raw `data` array + a `next` flag. */
+export async function fetchAmpReviews(
+  appId: string,
+  country: string,
+  token: string,
+  offset: number,
+  limit = 20,
+): Promise<{ status: number; data: any[]; hasNext: boolean }> {
+  const cc = country.toLowerCase();
+  const url =
+    `https://amp-api.apps.apple.com/v1/catalog/${cc}/apps/${appId}/reviews` +
+    `?l=en-US&offset=${offset}&limit=${limit}&platform=web` +
+    `&additionalPlatforms=appletv,ipad,iphone,mac&sort=mostRecent`;
+
+  const res = await fetch(
+    url,
+    fetchOpts({
+      Accept: "application/json",
+      Authorization: `Bearer ${token}`,
+      Origin: "https://apps.apple.com",
+      Referer: "https://apps.apple.com/",
+    }),
+  );
+
+  if (!res.ok) return { status: res.status, data: [], hasNext: false };
+  const json = await res.json();
+  return {
+    status: res.status,
+    data: Array.isArray(json?.data) ? json.data : [],
+    hasNext: Boolean(json?.next),
+  };
+}
+
+/** Pull reviews (star rating + text) from the App Store's AMP API. */
 export async function reviewsAppStore(
   appId: string,
   country: string,
-  maxPages = 5,
+  max = 120,
 ): Promise<Review[]> {
   const cc = country.toLowerCase();
+  const token = await getStorefrontToken(cc, appId);
+
   const reviews: Review[] = [];
   const seen = new Set<string>();
+  const limit = 20;
 
-  for (let page = 1; page <= maxPages; page++) {
-    const url =
-      `https://itunes.apple.com/${cc}/rss/customerreviews/` +
-      `page=${page}/id=${appId}/sortby=mostrecent/json`;
+  for (let offset = 0; offset < max + limit && reviews.length < max; offset += limit) {
+    const page = await fetchAmpReviews(appId, cc, token, offset, limit);
 
-    const res = await fetch(url, fetchOpts());
-    if (!res.ok) {
-      // Surface a block/rate-limit on the first page instead of returning empty.
-      if (page === 1) {
-        throw new Error(`App Store reviews request failed (HTTP ${res.status})`);
+    if (page.status !== 200) {
+      if (offset === 0) {
+        throw new Error(`App Store reviews API failed (HTTP ${page.status})`);
       }
-      break; // later pages can 404 once we run out of reviews
+      break;
     }
+    if (page.data.length === 0) break;
 
-    const json = await res.json();
     let added = 0;
-    for (const r of parseAppStoreFeed(json)) {
-      const id = `${page}:${r.id}`;
-      if (seen.has(id)) continue;
+    for (const r of page.data) {
+      const id = String(r?.id ?? `${offset}-${added}`);
+      const text = String(r?.attributes?.review ?? "").trim();
+      const rating = Number(r?.attributes?.rating) || 0;
+      if (!text || seen.has(id)) continue;
       seen.add(id);
-      reviews.push(r);
+      reviews.push({ id, rating, text });
       added++;
     }
-    if (added === 0) break;
+
+    if (!page.hasNext || added === 0) break;
   }
 
   return reviews;
