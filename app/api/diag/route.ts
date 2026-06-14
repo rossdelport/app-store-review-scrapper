@@ -1,9 +1,6 @@
 import { NextResponse } from "next/server";
-import { gotProxyAgent, proxyEnabled } from "@/lib/proxy";
-import {
-  getStorefrontToken,
-  fetchAmpReviews,
-} from "@/lib/scrapers/appStore";
+import { fetchDispatcher, gotProxyAgent, proxyEnabled } from "@/lib/proxy";
+import { fetchAmpReviews } from "@/lib/scrapers/appStore";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -14,10 +11,13 @@ export const dynamic = "force-dynamic";
  *   /api/diag?store=googleplay
  *   /api/diag?store=appstore&appId=389801252&country=gb
  *
- * It exercises the real review path and reports exactly what came back, so we
- * can tell a token/API problem apart from an empty result. Safe to delete.
+ * For the App Store it probes the apps.apple.com page so we can locate the
+ * AMP API token, then tries the reviews API. Safe to delete.
  */
 
+const SAFARI_UA =
+  "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 " +
+  "(KHTML, like Gecko) Version/16.0 Safari/605.1.15";
 const CHROME_UA =
   "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 " +
   "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36";
@@ -29,42 +29,74 @@ export async function GET(req: Request) {
 
   if (store === "appstore") {
     const appId = sp.get("appId") || "389801252"; // Instagram
+    const pageUrl = `https://apps.apple.com/${country}/app/id${appId}`;
     try {
-      // Step 1: get the AMP API bearer token from the App Store page.
-      let token = "";
-      let tokenOk = false;
-      try {
-        token = await getStorefrontToken(country, appId);
-        tokenOk = true;
-      } catch (e) {
-        return NextResponse.json({
-          store,
-          appId,
-          country,
-          proxy: proxyEnabled(),
-          tokenOk: false,
-          tokenError: e instanceof Error ? e.message : String(e),
-        });
-      }
+      // Probe the App Store page so we can see where (or whether) the token is.
+      const pageRes = await fetch(pageUrl, {
+        headers: {
+          "User-Agent": SAFARI_UA,
+          Accept: "text/html",
+          "Accept-Language": "en-US,en;q=0.9",
+        },
+        cache: "no-store",
+        dispatcher: fetchDispatcher(),
+      } as any);
+      const html = await pageRes.text();
 
-      // Step 2: hit the reviews API with that token.
-      const page = await fetchAmpReviews(appId, country, token, 0, 20);
-      const sample = page.data.slice(0, 2).map((r: any) => ({
-        rating: r?.attributes?.rating,
-        text: String(r?.attributes?.review ?? "").slice(0, 120),
-      }));
+      const metaMatch = html.match(
+        /<meta[^>]+web-experience-app\/config\/environment[^>]+content="([^"]+)"/,
+      );
+      const jwtMatch = html.match(
+        /eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+/,
+      );
+      const tokenIdx = html.indexOf("token");
+
+      // Best-effort token extraction (same logic the scraper uses).
+      let token = "";
+      if (metaMatch) {
+        const decoded = decodeURIComponent(metaMatch[1]);
+        const t = decoded.match(/"token"\s*:\s*"([^"]+)"/);
+        if (t) token = t[1];
+      }
+      if (!token && jwtMatch) token = jwtMatch[0];
+
+      let amp: any = null;
+      if (token) {
+        const page = await fetchAmpReviews(appId, country, token, 0, 20);
+        amp = {
+          status: page.status,
+          reviews: page.data.length,
+          hasNext: page.hasNext,
+          sample: page.data.slice(0, 2).map((r: any) => ({
+            rating: r?.attributes?.rating,
+            text: String(r?.attributes?.review ?? "").slice(0, 100),
+          })),
+        };
+      }
 
       return NextResponse.json({
         store,
         appId,
         country,
         proxy: proxyEnabled(),
-        tokenOk,
-        tokenPreview: token.slice(0, 16) + "…",
-        ampApiStatus: page.status,
-        reviewsOnFirstPage: page.data.length,
-        hasNextPage: page.hasNext,
-        sample,
+        page: {
+          status: pageRes.status,
+          finalUrl: pageRes.url,
+          contentType: pageRes.headers.get("content-type"),
+          length: html.length,
+          hasEnvMeta: Boolean(metaMatch),
+          hasMediaApi: html.includes("MEDIA_API"),
+          hasJwt: Boolean(jwtMatch),
+          hasTokenWord: tokenIdx !== -1,
+          headStart: html.slice(0, 220),
+          tokenContext:
+            tokenIdx !== -1
+              ? html.slice(Math.max(0, tokenIdx - 40), tokenIdx + 140)
+              : null,
+        },
+        tokenFound: Boolean(token),
+        tokenPreview: token ? token.slice(0, 16) + "…" : null,
+        amp,
       });
     } catch (e) {
       return NextResponse.json({
