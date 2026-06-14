@@ -20,6 +20,19 @@ countries into one CSV**.
   you scraped.
 - 🧪 **Sample mode** — load demo data to try the whole flow with no network.
 
+### Analyze reviews → build spec (`/analyze`)
+
+- 📤 **Upload** one or many review CSVs (ReviewMaxxing exports, this app's CSV, or
+  any CSV with a review/rating column).
+- 🧠 **Cluster** them with **Claude (Opus 4.8)** into three columns — **Love**,
+  **Want Added**, **Don't Need** — each with themes, frequency, and example quotes.
+- 📝 **Generate prompt + context** — produce a massive, copy-paste build
+  specification to hand to Claude Code for a v1.0 iOS app aimed at App Store
+  acceptance.
+
+Set `ANTHROPIC_API_KEY` (from [console.anthropic.com](https://console.anthropic.com))
+in your environment (and on Vercel) to enable it.
+
 ## Tech stack
 
 - [Next.js 14](https://nextjs.org) (App Router) + TypeScript
