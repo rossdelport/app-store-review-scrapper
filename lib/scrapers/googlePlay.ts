@@ -8,19 +8,13 @@ async function gplay(): Promise<any> {
   return mod.default ?? mod;
 }
 
-// Passed through to google-play-scraper's underlying `got` requests. A real
-// browser UA + language reduces the chance Google serves an empty/blocked body,
-// and an optional proxy agent routes around datacenter-IP throttling.
-function requestOptions() {
-  return {
-    headers: {
-      "User-Agent":
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 " +
-        "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-      "Accept-Language": "en-US,en;q=0.9",
-    },
-    agent: gotProxyAgent(),
-  };
+// Passed through to google-play-scraper's underlying `got` requests. Only the
+// optional proxy agent is set here — NOT custom headers: the library merges
+// requestOptions shallowly, so a `headers` object would clobber the
+// Content-Type it needs for its POST requests and Google returns HTTP 400.
+function requestOptions(): { agent: ReturnType<typeof gotProxyAgent> } | undefined {
+  const agent = gotProxyAgent();
+  return agent ? { agent } : undefined;
 }
 
 export async function searchGooglePlay(

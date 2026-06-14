@@ -24,9 +24,6 @@ export const dynamic = "force-dynamic";
 const SAFARI_UA =
   "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 " +
   "(KHTML, like Gecko) Version/16.0 Safari/605.1.15";
-const CHROME_UA =
-  "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 " +
-  "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36";
 
 /** Decode a JWT's payload (alg/iss/exp) without verifying it. */
 function decodeJwt(jwt: string): any {
@@ -219,43 +216,46 @@ export async function GET(req: Request) {
     }
   }
 
-  // Google Play
+  // Google Play — test the library with its DEFAULTS (no custom requestOptions)
+  // plus, when a proxy is set, with just the agent.
+  const term = sp.get("term") || "instagram";
   const appId = sp.get("appId") || "com.instagram.android";
+  const agentOpt = gotProxyAgent() ? { agent: gotProxyAgent() } : undefined;
+  const out: any = { store, country, proxy: proxyEnabled() };
+
   try {
     const mod: any = await import("google-play-scraper");
     const gp = mod.default ?? mod;
-    const res = await gp.reviews({
-      appId,
-      sort: gp.sort.NEWEST,
-      num: 50,
-      country,
-      lang: "en",
-      throttle: 5,
-      requestOptions: {
-        headers: { "User-Agent": CHROME_UA, "Accept-Language": "en-US,en;q=0.9" },
-        agent: gotProxyAgent(),
-      },
-    });
-    const data: any[] = Array.isArray(res) ? res : (res?.data ?? []);
-    return NextResponse.json({
-      store,
-      appId,
-      country,
-      proxy: proxyEnabled(),
-      reviewCount: data.length,
-      note:
-        data.length === 0
-          ? "google-play-scraper returned 0 reviews with no error — this is what a blocked/throttled IP looks like."
-          : "ok",
-      sample: data.slice(0, 1).map((r) => ({ score: r.score, text: r.text })),
-    });
+
+    try {
+      const r = await gp.search({ term, num: 5, country, lang: "en", requestOptions: agentOpt });
+      out.searchDefault = { ok: true, count: r.length, first: r[0]?.appId };
+    } catch (e: any) {
+      out.searchDefault = { error: e?.message || String(e) };
+    }
+
+    try {
+      const r = await gp.reviews({
+        appId,
+        sort: gp.sort.NEWEST,
+        num: 20,
+        country,
+        lang: "en",
+        requestOptions: agentOpt,
+      });
+      const data: any[] = Array.isArray(r) ? r : (r?.data ?? []);
+      out.reviewsDefault = {
+        ok: true,
+        count: data.length,
+        sample: data.slice(0, 1).map((x) => ({ score: x.score, text: String(x.text || "").slice(0, 80) })),
+      };
+    } catch (e: any) {
+      out.reviewsDefault = { error: e?.message || String(e) };
+    }
   } catch (e) {
-    return NextResponse.json({
-      store,
-      appId,
-      country,
-      error: e instanceof Error ? e.message : String(e),
-    });
+    out.error = e instanceof Error ? e.message : String(e);
   }
+
+  return NextResponse.json(out);
 }
 
