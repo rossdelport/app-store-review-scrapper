@@ -8,7 +8,15 @@ import type { Store } from "@/lib/types";
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
+const EMPTY_MESSAGE =
+  "No reviews came back for this app in the selected country. If the app is " +
+  "hosted on a cloud platform (e.g. Vercel), the store is most likely " +
+  "rate-limiting or blocking the server's IP — this is common for Google Play. " +
+  "Try the App Store tab, a different country, or 'Load sample data'.";
+
 export async function POST(req: Request) {
+  const debug = new URL(req.url).searchParams.get("debug") === "1";
+
   try {
     const body = await req.json();
     const store = body.store as Store;
@@ -27,18 +35,34 @@ export async function POST(req: Request) {
         ? await reviewsAppStore(appId, country)
         : await reviewsGooglePlay(appId, country);
 
+    // Visible in `vercel logs` / the Functions tab to confirm what happened.
+    console.log(
+      `[reviews] store=${store} appId=${appId} country=${country} -> ${reviews.length} reviews`,
+    );
+
     if (reviews.length === 0) {
       return NextResponse.json(
         {
-          error:
-            "No reviews found for that app in the selected country. Try another country or app.",
+          error: EMPTY_MESSAGE,
+          ...(debug ? { debug: { store, appId, country, count: 0 } } : {}),
         },
         { status: 404 },
       );
     }
 
-    return NextResponse.json({ reviews, source: "live" });
+    return NextResponse.json({
+      reviews,
+      source: "live",
+      ...(debug ? { debug: { store, appId, country, count: reviews.length } } : {}),
+    });
   } catch (e) {
-    return NextResponse.json({ error: friendlyError(e) }, { status: 502 });
+    console.error("[reviews] error:", e);
+    return NextResponse.json(
+      {
+        error: friendlyError(e),
+        ...(debug ? { debug: { raw: e instanceof Error ? e.message : String(e) } } : {}),
+      },
+      { status: 502 },
+    );
   }
 }

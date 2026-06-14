@@ -51,15 +51,41 @@ npm start
 Only the **star rating** and **review text** are kept — that's all that lands
 in the table and the CSV.
 
-## A note on network access
+## Deploying & the "No reviews found" gotcha
 
-The store endpoints (Apple / Google) must be reachable from wherever the app
-runs. Some hosts and sandboxes block outbound traffic to them, in which case a
-scrape returns a clear error (HTTP 403). When that happens:
+The store endpoints must be reachable from wherever the app runs, **and the
+host's IP must not be blocked by the store.** This is the #1 source of
+confusion when deploying to a shared cloud platform.
 
-- Use **Load sample data** to exercise the UI, or
-- Run/deploy the app somewhere with open internet egress (most VPS hosts,
-  Vercel, your own machine, etc.).
+**Why "No reviews found" can happen on Vercel/serverless even though it works
+locally:** Apple and Google aggressively rate-limit and block requests coming
+from datacenter IP ranges. The App Store *search* and Google Play *search*
+endpoints usually still respond, but the **review** endpoints often don't:
+
+- **Google Play** review data comes from a `batchexecute` RPC. When that IP is
+  throttled, Google returns an empty body and `google-play-scraper` resolves to
+  an **empty array** (it doesn't throw). The app reports "No reviews found".
+- **Apple's** review RSS feed may return `403`/empty from datacenter IPs.
+
+This is **not** a bug in the parser — it's the store declining to serve a
+flagged IP.
+
+### How to confirm what's happening
+
+- Add `?debug=1` to the request, or check your host's function logs. Each call
+  logs `[reviews] store=… appId=… country=… -> N reviews`. `N = 0` with no
+  error means the store returned nothing (an IP block/throttle), not a crash.
+- Try the **App Store** tab — its RSS feed is often reachable from clouds even
+  when Google Play isn't.
+
+### Ways to make it work in production
+
+1. **Run from a non-datacenter IP** — your own machine or a VPS whose IP isn't
+   flagged. This is the simplest reliable option.
+2. **Route store requests through a residential/rotating proxy.** (Hook this in
+   at the `fetch` call in `lib/scrapers/appStore.ts` and via `requestOptions`
+   in `lib/scrapers/googlePlay.ts`.)
+3. Use **Load sample data** to demo the UI with no network at all.
 
 Be mindful of each store's terms of service and rate limits, and scrape
 responsibly.

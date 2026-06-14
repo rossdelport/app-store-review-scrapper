@@ -7,12 +7,29 @@ async function gplay(): Promise<any> {
   return mod.default ?? mod;
 }
 
+// Passed through to google-play-scraper's underlying `got` requests. A real
+// browser UA + language reduces the chance Google serves an empty/blocked body.
+const REQUEST_OPTIONS = {
+  headers: {
+    "User-Agent":
+      "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 " +
+      "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+    "Accept-Language": "en-US,en;q=0.9",
+  },
+};
+
 export async function searchGooglePlay(
   term: string,
   country: string,
 ): Promise<AppResult[]> {
   const gp = await gplay();
-  const results = await gp.search({ term, num: 8, country, lang: "en" });
+  const results = await gp.search({
+    term,
+    num: 8,
+    country,
+    lang: "en",
+    requestOptions: REQUEST_OPTIONS,
+  });
   return (results ?? []).map(
     (a: any): AppResult => ({
       id: a.appId,
@@ -38,6 +55,8 @@ export async function reviewsGooglePlay(
     num: max,
     country,
     lang: "en",
+    throttle: 5,
+    requestOptions: REQUEST_OPTIONS,
   });
 
   const data: any[] = Array.isArray(res) ? res : (res?.data ?? []);
