@@ -8,8 +8,6 @@ import {
   getStorefrontToken,
 } from "@/lib/scrapers/appStore";
 
-const JWT_RE = /eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+/;
-
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
@@ -50,40 +48,81 @@ function decodeJwt(jwt: string): any {
 
 /** Test a token against the reviews API two ways: global fetch (which may drop
  *  the forbidden `Origin` header) vs undici.request (which sends it). */
-async function tryAmp(appId: string, country: string, token: string) {
-  const url =
+// US App Store storefront id (143441), with the API version suffix.
+const STOREFRONT: Record<string, string> = {
+  us: "143441-1,29",
+  gb: "143444-2,29",
+  ca: "143455-6,29",
+  au: "143460,29",
+};
+
+/** Echo what headers actually reach a server, to confirm Origin is transmitted. */
+async function echoHeaders(token: string) {
+  try {
+    const r = await undiciRequest("https://httpbin.org/headers", {
+      method: "GET",
+      headers: {
+        Authorization: `Bearer ${token.slice(0, 10)}…`,
+        Origin: "https://apps.apple.com",
+        "User-Agent": SAFARI_UA,
+      },
+      dispatcher: fetchDispatcher(),
+    });
+    const j: any = await r.body.json();
+    return { origin: j?.headers?.Origin ?? null, seen: Object.keys(j?.headers ?? {}) };
+  } catch (e) {
+    return { error: e instanceof Error ? e.message : String(e) };
+  }
+}
+
+/** Try the reviews API several ways to find the combination Apple accepts. */
+async function runAmpVariants(
+  appId: string,
+  country: string,
+  token: string,
+  cookie: string,
+) {
+  const base =
     `https://amp-api.apps.apple.com/v1/catalog/${country}/apps/${appId}/reviews` +
-    `?l=en-US&offset=0&limit=10&platform=web` +
-    `&additionalPlatforms=appletv,ipad,iphone,mac`;
-  const headers = {
-    Authorization: `Bearer ${token}`,
-    Origin: "https://apps.apple.com",
-    Referer: "https://apps.apple.com/",
-    "User-Agent": SAFARI_UA,
-    Accept: "application/json",
-  };
-  const countOf = (s: string) => {
+    `?l=en-US&offset=0&limit=10&platform=web&additionalPlatforms=appletv,ipad,iphone,mac`;
+  const sf = STOREFRONT[country] || "143441-1,29";
+
+  const defs: [string, string, Record<string, string>][] = [
+    ["base", base, {}],
+    ["storefront", base, { "X-Apple-Store-Front": sf }],
+    ["cookies", base, cookie ? { Cookie: cookie } : {}],
+    ["cookies+storefront", base, { ...(cookie ? { Cookie: cookie } : {}), "X-Apple-Store-Front": sf }],
+    ["edge-host", base.replace("amp-api.apps", "amp-api-edge.apps"), {}],
+  ];
+
+  const out: any[] = [];
+  for (const [name, url, extra] of defs) {
     try {
-      return (JSON.parse(s).data || []).length;
-    } catch {
-      return 0;
+      const r = await undiciRequest(url, {
+        method: "GET",
+        headers: {
+          Authorization: `Bearer ${token}`,
+          Origin: "https://apps.apple.com",
+          Referer: "https://apps.apple.com/",
+          "User-Agent": SAFARI_UA,
+          Accept: "application/json",
+          ...extra,
+        },
+        dispatcher: fetchDispatcher(),
+      });
+      const b = await r.body.text();
+      let count = 0;
+      try {
+        count = (JSON.parse(b).data || []).length;
+      } catch {
+        /* not json */
+      }
+      out.push({ name, status: r.statusCode, count, body: b.slice(0, 120) });
+    } catch (e) {
+      out.push({ name, error: e instanceof Error ? e.message : String(e) });
     }
-  };
-
-  const f = await fetch(url, { headers, cache: "no-store", dispatcher: fetchDispatcher() } as any);
-  const fBody = await f.text();
-
-  const u = await undiciRequest(url, { method: "GET", headers, dispatcher: fetchDispatcher() });
-  const uBody = await u.body.text();
-
-  return {
-    viaFetch: { status: f.status, count: countOf(fBody) },
-    viaUndici: {
-      status: u.statusCode,
-      count: countOf(uBody),
-      body: uBody.slice(0, 150),
-    },
-  };
+  }
+  return out;
 }
 
 export async function GET(req: Request) {
@@ -110,48 +149,38 @@ export async function GET(req: Request) {
 
       const assetUrls = collectAssetUrls(html);
 
-      // When ?deep=1, pull EVERY JWT from the bundles, decode each, and try
-      // each one against the reviews API so we can see which token works.
-      let assets: any = null;
-      let ampTrials: any = null;
-      if (deep) {
-        const results: any[] = [];
-        const jwts = new Set<string>();
-        for (const url of assetUrls.slice(0, 8)) {
-          try {
-            const r = await fetch(url, {
-              headers: { "User-Agent": SAFARI_UA, Accept: "*/*" },
-              cache: "no-store",
-              dispatcher: fetchDispatcher(),
-            } as any);
-            const body = r.ok ? await r.text() : "";
-            const found = body.match(new RegExp(JWT_RE.source, "g")) || [];
-            found.forEach((j) => jwts.add(j));
-            results.push({ url, status: r.status, length: body.length, jwtCount: found.length });
-          } catch (e) {
-            results.push({ url, error: e instanceof Error ? e.message : String(e) });
-          }
-        }
-        assets = { count: assetUrls.length, scanned: results, uniqueJwts: jwts.size };
-
-        const candidates = Array.from(jwts).slice(0, 6);
-        ampTrials = [];
-        for (const jwt of candidates) {
-          ampTrials.push({
-            preview: jwt.slice(0, 18) + "…",
-            decoded: decodeJwt(jwt),
-            amp: await tryAmp(appId, country, jwt),
-          });
-        }
-      }
-
-      // Run the real token logic (HTML, then JS-asset scan) + reviews.
+      // Get the token first (HTML, then JS-asset scan).
       let token = "";
       let tokenError: string | null = null;
       try {
         token = await getStorefrontToken(country, appId);
       } catch (e) {
         tokenError = e instanceof Error ? e.message : String(e);
+      }
+
+      // When ?deep=1, verify header transmission and try API request variants.
+      let experiment: any = null;
+      if (deep && token) {
+        // Capture session cookies the App Store page sets.
+        let cookie = "";
+        try {
+          const pg = await undiciRequest(pageUrl, {
+            method: "GET",
+            headers: { "User-Agent": SAFARI_UA, Accept: "text/html" },
+            dispatcher: fetchDispatcher(),
+          });
+          const sc: any = pg.headers["set-cookie"];
+          const arr = Array.isArray(sc) ? sc : sc ? [sc] : [];
+          cookie = arr.map((c: string) => c.split(";")[0]).join("; ");
+          await pg.body.dump();
+        } catch {
+          /* ignore */
+        }
+        experiment = {
+          cookieLen: cookie.length,
+          echo: await echoHeaders(token),
+          variants: await runAmpVariants(appId, country, token, cookie),
+        };
       }
 
       let amp: any = null;
@@ -172,11 +201,11 @@ export async function GET(req: Request) {
           jsAssetCount: assetUrls.length,
           hasInlineToken: Boolean(extractTokenFromHtml(html)),
         },
-        assets,
-        ampTrials,
         tokenFound: Boolean(token),
         tokenPreview: token ? token.slice(0, 16) + "…" : null,
+        tokenDecoded: token ? decodeJwt(token) : null,
         tokenError,
+        experiment,
         amp,
       });
     } catch (e) {
