@@ -267,9 +267,22 @@ export default function Scraper() {
   // ---- render: scraping / done ---------------------------------------------
   if (scrape) {
     const finished = scrape.status === "done" || scrape.status === "cancelled";
+    const errorCount = Object.values(scrape.cells).filter((c) => c.status === "error").length;
+    const allFailed = finished && collected.length === 0 && errorCount > 0;
     return (
       <div className="space-y-5">
         <ScrapingProgress state={scrape} onPause={pause} onResume={resume} onCancel={cancel} />
+        {allFailed && (
+          <div className="mx-auto max-w-3xl rounded-2xl border border-amber-200 bg-amber-50 p-5 text-sm text-amber-900">
+            <p className="font-semibold">Every request was blocked, so no reviews came back.</p>
+            <p className="mt-1 text-amber-800">
+              App stores block requests from shared cloud IPs (like Vercel&apos;s). This works from a
+              home/residential IP — run it locally with <code className="rounded bg-amber-100 px-1">npm run dev</code> — or route
+              traffic through a proxy by setting <code className="rounded bg-amber-100 px-1">SCRAPER_PROXY_URL</code> in your
+              Vercel environment variables. (Tip: use <span className="font-medium">load sample data</span> to demo the full flow anywhere.)
+            </p>
+          </div>
+        )}
         {finished && (
           <div className="mx-auto flex max-w-3xl flex-col items-center gap-3 rounded-2xl border border-slate-200 bg-white p-5 text-center shadow-sm sm:flex-row sm:justify-between sm:text-left">
             <div>
