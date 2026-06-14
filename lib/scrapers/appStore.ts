@@ -131,6 +131,11 @@ export async function getStorefrontToken(
   country: string,
   appId: string,
 ): Promise<string> {
+  // Preferred on cloud hosts: a token supplied via env, so we never download
+  // the 2.3 MB JS bundle through a proxy (which exceeds serverless time limits).
+  const envToken = process.env.APPLE_AMP_TOKEN?.trim();
+  if (envToken) return envToken;
+
   if (cachedToken && Date.now() - cachedToken.at < TOKEN_TTL_MS) {
     return cachedToken.value;
   }

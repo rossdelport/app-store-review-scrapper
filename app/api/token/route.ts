@@ -25,3 +25,20 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: friendlyError(e) }, { status: 502 });
   }
 }
+
+/**
+ * Convenience: open this in a browser (locally, where the direct fetch is fast)
+ * to copy the token, then paste it into the APPLE_AMP_TOKEN env var on Vercel.
+ */
+export async function GET() {
+  try {
+    const token = await getStorefrontToken(DEFAULT_COUNTRY, "389801252");
+    return NextResponse.json({
+      token,
+      fromEnv: Boolean(process.env.APPLE_AMP_TOKEN?.trim()),
+      note: "Set this value as APPLE_AMP_TOKEN in your host's env vars (it lasts ~a month).",
+    });
+  } catch (e) {
+    return NextResponse.json({ error: friendlyError(e) }, { status: 502 });
+  }
+}
