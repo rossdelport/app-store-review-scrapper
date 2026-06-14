@@ -6,8 +6,13 @@ const SAFARI_UA =
   "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 " +
   "(KHTML, like Gecko) Version/16.0 Safari/605.1.15";
 
-/** Build fetch() options incl. headers and the optional proxy dispatcher
- *  (typed loosely because `dispatcher` isn't in the lib DOM RequestInit). */
+/**
+ * fetch() options for the *non-blocked* App Store endpoints (iTunes Search and
+ * the apps.apple.com page / JS bundle for the token). These run DIRECT — not
+ * through the proxy — because Apple's CDN is reachable from cloud hosts, and
+ * pushing the 2.3 MB token bundle through a scraping proxy is slow and
+ * credit-heavy. Only the reviews API (fetchAmpReviews) uses the proxy.
+ */
 function fetchOpts(extraHeaders: Record<string, string> = {}): any {
   return {
     headers: {
@@ -16,7 +21,7 @@ function fetchOpts(extraHeaders: Record<string, string> = {}): any {
       ...extraHeaders,
     },
     cache: "no-store",
-    dispatcher: fetchDispatcher(),
+    signal: AbortSignal.timeout(15000),
   };
 }
 
@@ -164,6 +169,8 @@ export async function fetchAmpReviews(
       "User-Agent": SAFARI_UA,
     },
     dispatcher: fetchDispatcher(),
+    headersTimeout: 20000,
+    bodyTimeout: 20000,
   });
 
   if (statusCode !== 200) {
