@@ -7,14 +7,30 @@ export interface AppResult {
   developer: string;
   icon: string;
   url: string;
-  score?: number; // overall store rating, if known
+  score?: number; // average rating
+  ratingCount?: number; // number of ratings
+  installs?: string; // Google Play, e.g. "1M+"
+  genre?: string; // category
+  price?: string; // "Free" or "$1.99"
+  free?: boolean;
+  released?: string; // ISO date or year, used to show app age
   store: Store;
 }
 
-/** A single review. We only keep the star rating and the review text. */
+/** A single review — we keep the star rating and the text. */
 export interface Review {
   id: string;
   rating: number; // 1–5
+  text: string;
+}
+
+/** A review tagged with its source, for the combined CSV export. */
+export interface CollectedReview {
+  store: Store;
+  app: string;
+  appId: string;
+  country: string;
+  rating: number;
   text: string;
 }
 

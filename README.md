@@ -1,27 +1,31 @@
 # Review Scout
 
-Scrape **App Store** and **Google Play** reviews into a clean CSV — or browse
-them right in the app. Search any app by name (or paste a store URL), pick the
-country storefront, and export the **star rating + review text** for every
-review.
+Search a title, pick apps from **both the App Store and Google Play** at once,
+choose your markets, and **batch-scrape every rating + review across many
+countries into one CSV**.
 
 ![Review Scout](https://img.shields.io/badge/Next.js-14-black) ![TypeScript](https://img.shields.io/badge/TypeScript-5-blue)
 
 ## What it does
 
-- 🔎 **Search** the App Store or Google Play by app name, or paste a store URL.
-- ⭐ **Scrape** each review's star rating and full text.
-- 📊 **View** the results in a sortable, scrollable table with a rating summary.
-- 📥 **Export** to CSV (two columns: `rating`, `review`) with one click.
-- 🌍 **Per-country** storefronts (US, UK, DE, JP, …).
-- 🧪 **Sample mode** — load demo data to try the UI with no network access.
+- 🔎 **Two-column search** — one query returns App Store results on the left and
+  Google Play on the right, with ratings, category, price and age.
+- ✅ **Multi-select** apps across both stores.
+- 🌍 **Country tiers** — pick Tier 1 (Developed), Tier 2 (Emerging), Tier 3
+  (Rest of World), or hand-pick from 50 storefronts.
+- ⚡ **Batch scrape** — one request per app × country, with a live progress grid
+  (a spinner/checkmark per country flag), request rate and ETA. Pause / cancel
+  any time.
+- 📥 **One combined CSV** — `store, app, country, rating, review` for everything
+  you scraped.
+- 🧪 **Sample mode** — load demo data to try the whole flow with no network.
 
 ## Tech stack
 
 - [Next.js 14](https://nextjs.org) (App Router) + TypeScript
 - Tailwind CSS for the UI
 - [`google-play-scraper`](https://www.npmjs.com/package/google-play-scraper) for Google Play
-- Apple's public **iTunes Search API** + **customer-reviews RSS feed** for the App Store
+- Apple's **iTunes Search API** + the **AMP reviews API** for the App Store
 
 The scraping runs server-side in Node route handlers (`app/api/*`), so the
 store endpoints are never called from the browser.

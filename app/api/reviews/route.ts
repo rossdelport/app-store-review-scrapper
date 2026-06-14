@@ -22,6 +22,7 @@ export async function POST(req: Request) {
     const store = body.store as Store;
     const appId = String(body.appId ?? "").trim();
     const country = isValidCountry(body.country) ? body.country : DEFAULT_COUNTRY;
+    const max = Math.min(Math.max(Number(body.max) || 100, 1), 200);
 
     if (!appId) {
       return NextResponse.json({ error: "Missing app id." }, { status: 400 });
@@ -32,8 +33,8 @@ export async function POST(req: Request) {
 
     const reviews =
       store === "appstore"
-        ? await reviewsAppStore(appId, country)
-        : await reviewsGooglePlay(appId, country);
+        ? await reviewsAppStore(appId, country, max)
+        : await reviewsGooglePlay(appId, country, max);
 
     // Visible in `vercel logs` / the Functions tab to confirm what happened.
     console.log(

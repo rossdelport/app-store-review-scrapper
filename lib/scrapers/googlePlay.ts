@@ -24,7 +24,7 @@ export async function searchGooglePlay(
   const gp = await gplay();
   const results = await gp.search({
     term,
-    num: 8,
+    num: 20,
     country,
     lang: "en",
     requestOptions: requestOptions(),
@@ -37,6 +37,9 @@ export async function searchGooglePlay(
       icon: a.icon,
       url: a.url,
       score: a.score,
+      price: a.priceText || (a.free ? "Free" : undefined),
+      free: a.free,
+      genre: a.genre,
       store: "googleplay",
     }),
   );

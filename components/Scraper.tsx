@@ -1,285 +1,435 @@
 "use client";
 
-import { useState } from "react";
-import type { AppResult, Review, Store } from "@/lib/types";
+import { useEffect, useRef, useState } from "react";
+import type { AppResult, CollectedReview, Review, Store } from "@/lib/types";
 import { COUNTRIES, DEFAULT_COUNTRY } from "@/lib/countries";
-import { parseStoreUrl } from "@/lib/parseUrl";
 import { reviewsToCsv, csvFilename } from "@/lib/csv";
-import { SAMPLE_APP, SAMPLE_REVIEWS } from "@/lib/sample";
-import { AppleIcon, PlayIcon, SearchIcon, SpinnerIcon } from "./icons";
+import {
+  SAMPLE_APPSTORE_APPS,
+  SAMPLE_GOOGLEPLAY_APPS,
+  mockReviews,
+} from "@/lib/sample";
+import { AppleIcon, PlayIcon, SearchIcon, SpinnerIcon, DownloadIcon } from "./icons";
 import AppCard from "./AppCard";
-import ReviewsTable from "./ReviewsTable";
+import ConfigureModal from "./ConfigureModal";
+import ScrapingProgress, {
+  cellKey,
+  type CellStatus,
+  type ScrapeState,
+} from "./ScrapingProgress";
 
-type Phase = "idle" | "results" | "reviews";
-
-const STORES: { id: Store; label: string; Icon: typeof AppleIcon }[] = [
-  { id: "appstore", label: "App Store", Icon: AppleIcon },
-  { id: "googleplay", label: "Google Play", Icon: PlayIcon },
-];
-
-/** Build a readable app name from a pasted store URL. */
-function titleFromUrl(store: Store, id: string, raw: string): string {
-  if (store === "appstore") {
-    const m = raw.match(/\/app\/([^/]+)\/id\d+/i);
-    if (m) {
-      return decodeURIComponent(m[1])
-        .replace(/-/g, " ")
-        .replace(/\b\w/g, (c) => c.toUpperCase());
-    }
-  }
-  return id;
-}
+const PER_CELL_MAX = 50;
+const CONCURRENCY = 6;
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+const selKey = (a: AppResult) => `${a.store}:${a.id}`;
 
 export default function Scraper() {
-  const [store, setStore] = useState<Store>("appstore");
+  const [term, setTerm] = useState("");
   const [country, setCountry] = useState(DEFAULT_COUNTRY);
-  const [query, setQuery] = useState("");
-
-  const [phase, setPhase] = useState<Phase>("idle");
-  const [results, setResults] = useState<AppResult[]>([]);
   const [searching, setSearching] = useState(false);
-  const [scrapingId, setScrapingId] = useState<string | null>(null);
+  const [searchError, setSearchError] = useState<string | null>(null);
 
-  const [app, setApp] = useState<AppResult | null>(null);
-  const [reviews, setReviews] = useState<Review[]>([]);
-  const [source, setSource] = useState<"live" | "sample">("live");
+  const [appStore, setAppStore] = useState<AppResult[]>([]);
+  const [googlePlay, setGooglePlay] = useState<AppResult[]>([]);
+  const [selected, setSelected] = useState<Map<string, AppResult>>(new Map());
 
-  const [error, setError] = useState<string | null>(null);
+  const [showConfig, setShowConfig] = useState(false);
+  const [scrape, setScrape] = useState<ScrapeState | null>(null);
+  const [collected, setCollected] = useState<CollectedReview[]>([]);
 
-  function reset() {
-    setPhase("idle");
-    setResults([]);
-    setApp(null);
-    setReviews([]);
-    setError(null);
-  }
+  const pausedRef = useRef(false);
+  const cancelledRef = useRef(false);
+  const demoRef = useRef(false);
+  const collectedRef = useRef<CollectedReview[]>([]);
+  const tickRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
-  async function scrapeApp(target: AppResult) {
-    setScrapingId(target.id);
-    setError(null);
-    try {
-      const res = await fetch("/api/reviews", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          store: target.store,
-          appId: target.id,
-          country,
-        }),
-      });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || "Failed to fetch reviews.");
-      setApp(target);
-      setReviews(data.reviews);
-      setSource("live");
-      setPhase("reviews");
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "Failed to fetch reviews.");
-    } finally {
-      setScrapingId(null);
-    }
+  useEffect(
+    () => () => {
+      cancelledRef.current = true; // stop any in-flight workers on unmount
+      if (tickRef.current) clearInterval(tickRef.current);
+    },
+    [],
+  );
+
+  const totalResults = appStore.length + googlePlay.length;
+
+  // ---- search ---------------------------------------------------------------
+  async function searchStore(store: Store, q: string): Promise<AppResult[]> {
+    const res = await fetch("/api/search", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ store, term: q, country }),
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || "Search failed");
+    return data.results || [];
   }
 
   async function handleSearch() {
-    const term = query.trim();
-    if (!term) return;
-    setError(null);
-
-    // Pasted a store URL? Skip search and scrape that app directly.
-    const parsed = parseStoreUrl(term);
-    if (parsed) {
-      const target: AppResult = {
-        id: parsed.id,
-        title: titleFromUrl(parsed.store, parsed.id, term),
-        developer: "",
-        icon: "",
-        url: term,
-        store: parsed.store,
-      };
-      setStore(parsed.store);
-      if (parsed.country) setCountry(parsed.country);
-      await scrapeApp(target);
-      return;
-    }
-
+    const q = term.trim();
+    if (!q) return;
+    demoRef.current = false;
     setSearching(true);
-    try {
-      const res = await fetch("/api/search", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ store, term, country }),
-      });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || "Search failed.");
-      setResults(data.results);
-      setPhase("results");
-      if (data.results.length === 0) {
-        setError("No apps matched that search. Try a different name.");
-      }
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "Search failed.");
-      setResults([]);
-      setPhase("results");
-    } finally {
-      setSearching(false);
+    setSearchError(null);
+    setAppStore([]);
+    setGooglePlay([]);
+    setSelected(new Map());
+
+    const [as, gp] = await Promise.allSettled([
+      searchStore("appstore", q),
+      searchStore("googleplay", q),
+    ]);
+    if (as.status === "fulfilled") setAppStore(as.value);
+    if (gp.status === "fulfilled") setGooglePlay(gp.value);
+    if (as.status === "rejected" && gp.status === "rejected") {
+      setSearchError(
+        (as.reason as Error)?.message ||
+          "Search failed — check the server's network access.",
+      );
     }
+    setSearching(false);
   }
 
   function loadSample() {
-    setError(null);
-    setApp(SAMPLE_APP);
-    setReviews(SAMPLE_REVIEWS);
-    setSource("sample");
-    setPhase("reviews");
+    demoRef.current = true;
+    setSearchError(null);
+    setTerm(term || "bookshelf");
+    setAppStore(SAMPLE_APPSTORE_APPS);
+    setGooglePlay(SAMPLE_GOOGLEPLAY_APPS);
+    setSelected(new Map());
   }
 
-  function handleDownload() {
-    if (!app) return;
-    const csv = reviewsToCsv(reviews);
+  // ---- selection ------------------------------------------------------------
+  function toggle(a: AppResult) {
+    setSelected((prev) => {
+      const next = new Map(prev);
+      const k = selKey(a);
+      next.has(k) ? next.delete(k) : next.set(k, a);
+      return next;
+    });
+  }
+  function selectAll() {
+    const next = new Map<string, AppResult>();
+    [...appStore, ...googlePlay].forEach((a) => next.set(selKey(a), a));
+    setSelected(next);
+  }
+  function deselectAll() {
+    setSelected(new Map());
+  }
+
+  // ---- scraping -------------------------------------------------------------
+  async function fetchCellReviews(task: { app: AppResult; country: string }, seed: number): Promise<Review[]> {
+    if (demoRef.current) {
+      await sleep(120 + Math.random() * 500);
+      return mockReviews(seed + task.country.charCodeAt(0) + task.country.charCodeAt(1));
+    }
+    const res = await fetch("/api/reviews", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        store: task.app.store,
+        appId: task.app.id,
+        country: task.country,
+        max: PER_CELL_MAX,
+      }),
+    });
+    if (res.status === 404) return []; // no reviews for that storefront — that's fine
+    if (!res.ok) throw new Error("request failed");
+    const data = await res.json();
+    return data.reviews || [];
+  }
+
+  async function startScraping(countries: string[]) {
+    const apps = Array.from(selected.values());
+    const tasks: { app: AppResult; country: string }[] = [];
+    apps.forEach((a) => countries.forEach((c) => tasks.push({ app: a, country: c })));
+
+    const cells: Record<string, { status: CellStatus; count: number }> = {};
+    tasks.forEach((t) => {
+      cells[cellKey(t.app.store, t.app.id, t.country)] = { status: "pending", count: 0 };
+    });
+
+    cancelledRef.current = false;
+    pausedRef.current = false;
+    collectedRef.current = [];
+    setCollected([]);
+    setShowConfig(false);
+
+    setScrape({
+      apps,
+      countries,
+      cells,
+      done: 0,
+      total: tasks.length,
+      reviews: 0,
+      estimated: tasks.length * 35,
+      startedAt: Date.now(),
+      elapsedMs: 0,
+      status: "running",
+    });
+
+    if (tickRef.current) clearInterval(tickRef.current);
+    tickRef.current = setInterval(() => {
+      setScrape((prev) =>
+        prev && prev.status === "running" ? { ...prev, elapsedMs: Date.now() - prev.startedAt } : prev,
+      );
+    }, 500);
+
+    let idx = 0;
+    const worker = async () => {
+      while (true) {
+        if (cancelledRef.current) return;
+        while (pausedRef.current && !cancelledRef.current) await sleep(200);
+        if (cancelledRef.current) return;
+        const my = idx++;
+        if (my >= tasks.length) return;
+        const task = tasks[my];
+        const key = cellKey(task.app.store, task.app.id, task.country);
+
+        setScrape((prev) =>
+          prev ? { ...prev, cells: { ...prev.cells, [key]: { status: "running", count: 0 } } } : prev,
+        );
+
+        let count = 0;
+        let status: CellStatus = "done";
+        try {
+          const reviews = await fetchCellReviews(task, my * 13 + 1);
+          count = reviews.length;
+          for (const r of reviews) {
+            collectedRef.current.push({
+              store: task.app.store,
+              app: task.app.title,
+              appId: task.app.id,
+              country: task.country,
+              rating: r.rating,
+              text: r.text,
+            });
+          }
+        } catch {
+          status = "error";
+        }
+        if (cancelledRef.current) return;
+        setScrape((prev) =>
+          prev
+            ? {
+                ...prev,
+                cells: { ...prev.cells, [key]: { status, count } },
+                done: prev.done + 1,
+                reviews: prev.reviews + count,
+              }
+            : prev,
+        );
+      }
+    };
+
+    await Promise.all(Array.from({ length: Math.min(CONCURRENCY, tasks.length) }, worker));
+
+    if (tickRef.current) clearInterval(tickRef.current);
+    if (cancelledRef.current) {
+      setScrape((prev) => (prev ? { ...prev, status: "cancelled", elapsedMs: Date.now() - prev.startedAt } : prev));
+    } else {
+      setCollected(collectedRef.current.slice());
+      setScrape((prev) => (prev ? { ...prev, status: "done", elapsedMs: Date.now() - prev.startedAt } : prev));
+    }
+  }
+
+  function pause() {
+    pausedRef.current = true;
+    setScrape((prev) => (prev ? { ...prev, status: "paused" } : prev));
+  }
+  function resume() {
+    pausedRef.current = false;
+    setScrape((prev) => (prev && prev.status === "paused" ? { ...prev, status: "running" } : prev));
+  }
+  function cancel() {
+    cancelledRef.current = true;
+    pausedRef.current = false;
+  }
+  function backToResults() {
+    setScrape(null);
+    setCollected([]);
+  }
+
+  function downloadCsv() {
+    if (collected.length === 0) return;
+    const csv = reviewsToCsv(collected);
     const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
     a.href = url;
-    a.download = csvFilename(app.title, app.store);
+    a.download = csvFilename(term || "app");
     document.body.appendChild(a);
     a.click();
     a.remove();
     URL.revokeObjectURL(url);
   }
 
+  // ---- render: scraping / done ---------------------------------------------
+  if (scrape) {
+    const finished = scrape.status === "done" || scrape.status === "cancelled";
+    return (
+      <div className="space-y-5">
+        <ScrapingProgress state={scrape} onPause={pause} onResume={resume} onCancel={cancel} />
+        {finished && (
+          <div className="mx-auto flex max-w-3xl flex-col items-center gap-3 rounded-2xl border border-slate-200 bg-white p-5 text-center shadow-sm sm:flex-row sm:justify-between sm:text-left">
+            <div>
+              <p className="font-semibold text-slate-900">
+                {collected.length.toLocaleString()} reviews collected
+              </p>
+              <p className="text-sm text-slate-500">
+                across {scrape.apps.length} app{scrape.apps.length === 1 ? "" : "s"} and {scrape.countries.length} countr
+                {scrape.countries.length === 1 ? "y" : "ies"}, combined into one CSV.
+              </p>
+            </div>
+            <div className="flex shrink-0 items-center gap-3">
+              <button onClick={backToResults} className="rounded-lg border border-slate-200 px-4 py-2 text-sm font-medium text-slate-600 hover:bg-slate-50">
+                Back to results
+              </button>
+              <button
+                onClick={downloadCsv}
+                disabled={collected.length === 0}
+                className="inline-flex items-center gap-2 rounded-lg bg-slate-900 px-5 py-2.5 text-sm font-semibold text-white hover:bg-slate-800 disabled:opacity-40"
+              >
+                <DownloadIcon className="h-4 w-4" /> Download CSV
+              </button>
+            </div>
+          </div>
+        )}
+      </div>
+    );
+  }
+
+  // ---- render: search -------------------------------------------------------
   return (
     <div className="space-y-6">
-      {/* Control card */}
-      <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-card sm:p-6">
-        {/* Store toggle */}
-        <div className="mb-4">
-          <label className="mb-2 block text-sm font-medium text-slate-700">
-            Store
-          </label>
-          <div className="inline-flex rounded-xl border border-slate-200 bg-slate-50 p-1">
-            {STORES.map(({ id, label, Icon }) => {
-              const active = store === id;
-              return (
-                <button
-                  key={id}
-                  onClick={() => {
-                    setStore(id);
-                    if (phase === "results") reset();
-                  }}
-                  className={`inline-flex items-center gap-2 rounded-lg px-4 py-2 text-sm font-medium transition ${
-                    active
-                      ? "bg-white text-slate-900 shadow-sm"
-                      : "text-slate-500 hover:text-slate-700"
-                  }`}
-                >
-                  <Icon className="h-4 w-4" />
-                  {label}
-                </button>
-              );
-            })}
-          </div>
-        </div>
-
-        {/* Search + country */}
-        <div className="flex flex-col gap-3 sm:flex-row">
+      {/* control bar */}
+      <div className="sticky top-0 z-20 -mx-4 border-b border-slate-200 bg-slate-50/90 px-4 py-4 backdrop-blur sm:mx-0 sm:rounded-2xl sm:border sm:px-5 sm:shadow-sm">
+        <div className="flex flex-col gap-3 lg:flex-row lg:items-center">
           <div className="relative flex-1">
             <SearchIcon className="pointer-events-none absolute left-3 top-1/2 h-5 w-5 -translate-y-1/2 text-slate-400" />
             <input
-              type="text"
-              value={query}
-              onChange={(e) => setQuery(e.target.value)}
+              value={term}
+              onChange={(e) => setTerm(e.target.value)}
               onKeyDown={(e) => e.key === "Enter" && handleSearch()}
-              placeholder="App name (e.g. Instagram) or a store URL"
-              className="w-full rounded-xl border border-slate-200 bg-white py-3 pl-11 pr-4 text-slate-900 placeholder:text-slate-400 focus:border-brand-400 focus:outline-none focus:ring-2 focus:ring-brand-100"
+              placeholder="Search an app title (e.g. Instagram)"
+              className="w-full rounded-xl border border-slate-200 bg-white py-2.5 pl-11 pr-4 text-slate-900 placeholder:text-slate-400 focus:border-slate-400 focus:outline-none focus:ring-2 focus:ring-slate-200"
             />
           </div>
-
           <select
             value={country}
             onChange={(e) => setCountry(e.target.value)}
-            className="rounded-xl border border-slate-200 bg-white px-3 py-3 text-slate-700 focus:border-brand-400 focus:outline-none focus:ring-2 focus:ring-brand-100"
+            className="rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-slate-700 focus:border-slate-400 focus:outline-none focus:ring-2 focus:ring-slate-200"
           >
             {COUNTRIES.map((c) => (
-              <option key={c.code} value={c.code}>
-                {c.name}
-              </option>
+              <option key={c.code} value={c.code}>{c.name}</option>
             ))}
           </select>
-
           <button
             onClick={handleSearch}
-            disabled={searching || !query.trim()}
-            className="inline-flex items-center justify-center gap-2 rounded-xl bg-brand-600 px-6 py-3 font-semibold text-white shadow-sm transition hover:bg-brand-700 focus:outline-none focus:ring-2 focus:ring-brand-500 focus:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50"
+            disabled={searching || !term.trim()}
+            className="inline-flex items-center justify-center gap-2 rounded-xl bg-slate-900 px-6 py-2.5 font-semibold text-white hover:bg-slate-800 disabled:opacity-40"
           >
-            {searching ? (
-              <>
-                <SpinnerIcon className="h-5 w-5" />
-                Searching
-              </>
-            ) : (
-              "Search"
-            )}
+            {searching ? <><SpinnerIcon className="h-5 w-5" /> Searching</> : "Search"}
           </button>
         </div>
 
-        <p className="mt-3 text-xs text-slate-400">
-          Tip: paste a full App Store or Google Play link to skip straight to its
-          reviews. Or{" "}
-          <button
-            onClick={loadSample}
-            className="font-medium text-brand-600 underline-offset-2 hover:underline"
-          >
-            load sample data
-          </button>{" "}
-          to see how it works.
-        </p>
+        {totalResults > 0 && (
+          <div className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-2 text-sm">
+            <button onClick={selectAll} className="font-medium text-slate-600 hover:text-slate-900">
+              Select all ({totalResults})
+            </button>
+            <button onClick={deselectAll} className="font-medium text-slate-500 hover:text-slate-700">
+              Deselect all
+            </button>
+            <div className="ml-auto">
+              <button
+                onClick={() => setShowConfig(true)}
+                disabled={selected.size === 0}
+                className="relative inline-flex items-center gap-2 rounded-xl bg-slate-900 px-5 py-2.5 text-sm font-semibold text-white hover:bg-slate-800 disabled:opacity-40"
+              >
+                Get Reviews
+                {selected.size > 0 && (
+                  <span className="grid h-5 min-w-5 place-items-center rounded-full bg-white/20 px-1.5 text-xs">
+                    {selected.size}
+                  </span>
+                )}
+              </button>
+            </div>
+          </div>
+        )}
       </div>
 
-      {/* Error banner */}
-      {error && (
-        <div className="animate-fade-up rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-800">
-          {error}
+      {searchError && (
+        <div className="rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-800">
+          {searchError}
         </div>
       )}
 
-      {/* Search results */}
-      {phase === "results" && results.length > 0 && (
-        <div className="animate-fade-up space-y-3">
-          <p className="text-sm font-medium text-slate-500">
-            {results.length} result{results.length === 1 ? "" : "s"} — pick an app
-            to scrape its reviews
-          </p>
-          <div className="grid gap-3">
-            {results.map((r) => (
-              <AppCard
-                key={r.id}
-                app={r}
-                loading={scrapingId === r.id}
-                onSelect={scrapeApp}
-              />
-            ))}
-          </div>
-        </div>
-      )}
-
-      {/* Reviews */}
-      {phase === "reviews" && app && (
-        <div className="space-y-3">
-          <button
-            onClick={reset}
-            className="text-sm font-medium text-slate-500 hover:text-slate-700"
-          >
-            ← New search
+      {totalResults === 0 && !searching && (
+        <div className="rounded-2xl border border-dashed border-slate-200 p-10 text-center">
+          <p className="text-slate-500">Search a title to see App Store and Google Play results side by side.</p>
+          <button onClick={loadSample} className="mt-2 text-sm font-medium text-slate-900 underline-offset-2 hover:underline">
+            or load sample data
           </button>
-          <ReviewsTable
-            reviews={reviews}
-            appTitle={app.title}
-            store={app.store}
-            source={source}
-            onDownload={handleDownload}
-          />
         </div>
+      )}
+
+      {(totalResults > 0 || searching) && (
+        <div className="grid gap-6 lg:grid-cols-2">
+          <StoreColumn store="appstore" results={appStore} selected={selected} onToggle={toggle} searching={searching} />
+          <StoreColumn store="googleplay" results={googlePlay} selected={selected} onToggle={toggle} searching={searching} />
+        </div>
+      )}
+
+      {showConfig && (
+        <ConfigureModal
+          apps={Array.from(selected.values())}
+          onCancel={() => setShowConfig(false)}
+          onStart={startScraping}
+        />
       )}
     </div>
+  );
+}
+
+function StoreColumn({
+  store,
+  results,
+  selected,
+  onToggle,
+  searching,
+}: {
+  store: Store;
+  results: AppResult[];
+  selected: Map<string, AppResult>;
+  onToggle: (a: AppResult) => void;
+  searching: boolean;
+}) {
+  const isApple = store === "appstore";
+  return (
+    <section>
+      <div className="mb-3 flex items-center gap-2">
+        {isApple ? <AppleIcon className="h-5 w-5 text-slate-900" /> : <PlayIcon className="h-5 w-5" />}
+        <h3 className="text-sm font-bold uppercase tracking-wide text-slate-700">
+          {isApple ? "App Store" : "Google Play"}
+        </h3>
+        <span className="text-xs text-slate-400">({results.length} results)</span>
+      </div>
+      <div className="space-y-2">
+        {searching && results.length === 0 ? (
+          <div className="flex items-center justify-center gap-2 rounded-xl border border-slate-200 bg-white py-10 text-sm text-slate-400">
+            <SpinnerIcon className="h-4 w-4" /> Searching…
+          </div>
+        ) : results.length === 0 ? (
+          <div className="rounded-xl border border-dashed border-slate-200 py-10 text-center text-sm text-slate-400">
+            No results
+          </div>
+        ) : (
+          results.map((a, i) => (
+            <AppCard key={selKey(a)} app={a} rank={i + 1} selected={selected.has(selKey(a))} onToggle={onToggle} />
+          ))
+        )}
+      </div>
+    </section>
   );
 }
