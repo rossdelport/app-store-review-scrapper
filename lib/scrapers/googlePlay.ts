@@ -1,5 +1,5 @@
 import type { AppResult, Review } from "../types";
-import { gotProxyAgent } from "../proxy";
+import { gotProxyAgent, gotHttpsOptions } from "../proxy";
 
 // google-play-scraper@10 is ESM-only, so it's loaded with a dynamic import at
 // runtime (and kept out of the webpack bundle via next.config serverComponentsExternalPackages).
@@ -12,9 +12,11 @@ async function gplay(): Promise<any> {
 // optional proxy agent is set here — NOT custom headers: the library merges
 // requestOptions shallowly, so a `headers` object would clobber the
 // Content-Type it needs for its POST requests and Google returns HTTP 400.
-function requestOptions(): { agent: ReturnType<typeof gotProxyAgent> } | undefined {
+function requestOptions(): Record<string, unknown> | undefined {
   const agent = gotProxyAgent();
-  return agent ? { agent } : undefined;
+  const https = gotHttpsOptions();
+  if (!agent && !https) return undefined;
+  return { ...(agent ? { agent } : {}), ...(https ? { https } : {}) };
 }
 
 export async function searchGooglePlay(
