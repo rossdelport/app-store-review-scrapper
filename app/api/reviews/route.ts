@@ -7,6 +7,7 @@ import type { Store } from "@/lib/types";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
+export const maxDuration = 60; // allow slower proxied requests to finish
 
 const EMPTY_MESSAGE =
   "No reviews came back for this app in the selected country. If the app is " +

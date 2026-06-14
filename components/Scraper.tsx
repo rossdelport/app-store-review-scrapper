@@ -129,6 +129,8 @@ export default function Scraper() {
     let lastErr: unknown;
     for (let attempt = 1; attempt <= ATTEMPTS; attempt++) {
       if (cancelledRef.current) return [];
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), 45000); // never hang forever
       try {
         const res = await fetch("/api/reviews", {
           method: "POST",
@@ -139,6 +141,7 @@ export default function Scraper() {
             country: task.country,
             max: PER_CELL_MAX,
           }),
+          signal: controller.signal,
         });
         if (res.status === 404) return []; // no reviews for that storefront — fine
         if (!res.ok) throw new Error(`HTTP ${res.status}`); // 429 / 5xx -> retry
@@ -147,6 +150,8 @@ export default function Scraper() {
       } catch (e) {
         lastErr = e;
         if (attempt < ATTEMPTS) await sleep(400 * attempt + Math.random() * 300);
+      } finally {
+        clearTimeout(timer);
       }
     }
     throw lastErr;
