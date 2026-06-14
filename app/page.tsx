@@ -2,14 +2,14 @@ import Scraper from "@/components/Scraper";
 
 function Logo() {
   return (
-    <div className="flex items-center gap-2">
+    <a href="/" aria-label="Review Scout home" className="flex items-center gap-2 rounded-lg transition hover:opacity-80">
       <div className="grid h-9 w-9 place-items-center rounded-xl bg-slate-900 text-white">
         <svg viewBox="0 0 24 24" className="h-5 w-5" fill="currentColor">
           <path d="M12 2l2.9 6.26L21.5 9l-5 4.6L18 21l-6-3.5L6 21l1.5-7.4-5-4.6 6.6-.74L12 2z" />
         </svg>
       </div>
       <span className="text-lg font-bold tracking-tight text-slate-900">Review Scout</span>
-    </div>
+    </a>
   );
 }
 
