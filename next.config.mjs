@@ -4,7 +4,7 @@ const nextConfig = {
   experimental: {
     // google-play-scraper is an ESM package that should be loaded at runtime
     // by the Node server, not bundled by webpack.
-    serverComponentsExternalPackages: ["google-play-scraper"],
+    serverComponentsExternalPackages: ["google-play-scraper", "undici", "https-proxy-agent"],
   },
   images: {
     // App icons are served from Apple / Google CDNs.

@@ -1,4 +1,5 @@
 import type { AppResult, Review } from "../types";
+import { gotProxyAgent } from "../proxy";
 
 // google-play-scraper@10 is ESM-only, so it's loaded with a dynamic import at
 // runtime (and kept out of the webpack bundle via next.config serverComponentsExternalPackages).
@@ -8,15 +9,19 @@ async function gplay(): Promise<any> {
 }
 
 // Passed through to google-play-scraper's underlying `got` requests. A real
-// browser UA + language reduces the chance Google serves an empty/blocked body.
-const REQUEST_OPTIONS = {
-  headers: {
-    "User-Agent":
-      "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 " +
-      "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-    "Accept-Language": "en-US,en;q=0.9",
-  },
-};
+// browser UA + language reduces the chance Google serves an empty/blocked body,
+// and an optional proxy agent routes around datacenter-IP throttling.
+function requestOptions() {
+  return {
+    headers: {
+      "User-Agent":
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 " +
+        "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+      "Accept-Language": "en-US,en;q=0.9",
+    },
+    agent: gotProxyAgent(),
+  };
+}
 
 export async function searchGooglePlay(
   term: string,
@@ -28,7 +33,7 @@ export async function searchGooglePlay(
     num: 8,
     country,
     lang: "en",
-    requestOptions: REQUEST_OPTIONS,
+    requestOptions: requestOptions(),
   });
   return (results ?? []).map(
     (a: any): AppResult => ({
@@ -56,7 +61,7 @@ export async function reviewsGooglePlay(
     country,
     lang: "en",
     throttle: 5,
-    requestOptions: REQUEST_OPTIONS,
+    requestOptions: requestOptions(),
   });
 
   const data: any[] = Array.isArray(res) ? res : (res?.data ?? []);

@@ -80,11 +80,26 @@ flagged IP.
 
 ### Ways to make it work in production
 
-1. **Run from a non-datacenter IP** — your own machine or a VPS whose IP isn't
-   flagged. This is the simplest reliable option.
-2. **Route store requests through a residential/rotating proxy.** (Hook this in
-   at the `fetch` call in `lib/scrapers/appStore.ts` and via `requestOptions`
-   in `lib/scrapers/googlePlay.ts`.)
+1. **Route store requests through a proxy (built-in).** Set the
+   `SCRAPER_PROXY_URL` environment variable to a proxy with a non-flagged
+   (ideally residential) IP and both scrapers will use it automatically — no
+   code changes. This is what makes it work on Vercel.
+
+   ```bash
+   SCRAPER_PROXY_URL=http://USERNAME:PASSWORD@proxy-host:PORT
+   ```
+
+   Any HTTP/HTTPS proxy that supports HTTPS `CONNECT` tunneling works. Scraping
+   APIs that expose a proxy endpoint (ScraperAPI, ScrapingBee, Zyte, Bright
+   Data, Smartproxy, …) are the easiest option and several have free tiers. On
+   Vercel, add it under **Project → Settings → Environment Variables**, then
+   redeploy. Verify with `/api/diag` — the response includes `"proxy": true`
+   and should then show real review counts.
+
+2. **Run from a residential IP** — e.g. your own machine (`npm start`). Note
+   that most VPS/cloud IPs are *also* datacenter ranges and get throttled the
+   same way Vercel does, so a proxy is usually still needed off-Vercel too.
+
 3. Use **Load sample data** to demo the UI with no network at all.
 
 Be mindful of each store's terms of service and rate limits, and scrape

@@ -1,4 +1,5 @@
 import type { AppResult, Review } from "../types";
+import { fetchDispatcher } from "../proxy";
 
 // A desktop UA + language keeps Apple's public endpoints from rejecting the request.
 const UA =
@@ -11,6 +12,12 @@ const baseHeaders = {
   "Accept-Language": "en-US,en;q=0.9",
 };
 
+// fetch() options incl. the optional proxy dispatcher (typed loosely because
+// `dispatcher` isn't in the lib DOM RequestInit).
+function fetchOpts(): any {
+  return { headers: baseHeaders, cache: "no-store", dispatcher: fetchDispatcher() };
+}
+
 /** Search the App Store via the public iTunes Search API. */
 export async function searchAppStore(
   term: string,
@@ -20,7 +27,7 @@ export async function searchAppStore(
     `https://itunes.apple.com/search?media=software&entity=software&limit=8` +
     `&country=${encodeURIComponent(country.toLowerCase())}&term=${encodeURIComponent(term)}`;
 
-  const res = await fetch(url, { headers: baseHeaders, cache: "no-store" });
+  const res = await fetch(url, fetchOpts());
   if (!res.ok) throw new Error(`App Store search failed (HTTP ${res.status})`);
 
   const json = await res.json();
@@ -88,7 +95,7 @@ export async function reviewsAppStore(
       `https://itunes.apple.com/${cc}/rss/customerreviews/` +
       `page=${page}/id=${appId}/sortby=mostrecent/json`;
 
-    const res = await fetch(url, { headers: baseHeaders, cache: "no-store" });
+    const res = await fetch(url, fetchOpts());
     if (!res.ok) {
       // Surface a block/rate-limit on the first page instead of returning empty.
       if (page === 1) {

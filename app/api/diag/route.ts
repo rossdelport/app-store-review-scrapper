@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { fetchDispatcher, gotProxyAgent, proxyEnabled } from "@/lib/proxy";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -37,7 +38,8 @@ export async function GET(req: Request) {
           "Accept-Language": "en-US,en;q=0.9",
         },
         cache: "no-store",
-      });
+        dispatcher: fetchDispatcher(),
+      } as any);
       const text = await res.text();
 
       let entryCount: number | string = "n/a";
@@ -55,6 +57,7 @@ export async function GET(req: Request) {
         store,
         appId,
         country,
+        proxy: proxyEnabled(),
         url,
         upstreamStatus: res.status,
         ok: res.ok,
@@ -89,6 +92,7 @@ export async function GET(req: Request) {
       throttle: 5,
       requestOptions: {
         headers: { "User-Agent": CHROME_UA, "Accept-Language": "en-US,en;q=0.9" },
+        agent: gotProxyAgent(),
       },
     });
     const data: any[] = Array.isArray(res) ? res : (res?.data ?? []);
@@ -96,6 +100,7 @@ export async function GET(req: Request) {
       store,
       appId,
       country,
+      proxy: proxyEnabled(),
       reviewCount: data.length,
       note:
         data.length === 0
