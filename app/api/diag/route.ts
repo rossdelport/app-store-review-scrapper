@@ -1,5 +1,9 @@
 import { NextResponse } from "next/server";
-import { fetchDispatcher, gotProxyAgent, proxyEnabled } from "@/lib/proxy";
+import { gotProxyAgent, proxyEnabled } from "@/lib/proxy";
+import {
+  getStorefrontToken,
+  fetchAmpReviews,
+} from "@/lib/scrapers/appStore";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -10,14 +14,10 @@ export const dynamic = "force-dynamic";
  *   /api/diag?store=googleplay
  *   /api/diag?store=appstore&appId=389801252&country=gb
  *
- * It performs the raw upstream request and reports exactly what the store
- * returned, so we can tell an IP block / soft-throttle apart from a genuine
- * "no reviews" result. Safe to delete once we've diagnosed the deployment.
+ * It exercises the real review path and reports exactly what came back, so we
+ * can tell a token/API problem apart from an empty result. Safe to delete.
  */
 
-const SAFARI_UA =
-  "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 " +
-  "(KHTML, like Gecko) Version/16.0 Safari/605.1.15";
 const CHROME_UA =
   "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 " +
   "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36";
@@ -29,51 +29,50 @@ export async function GET(req: Request) {
 
   if (store === "appstore") {
     const appId = sp.get("appId") || "389801252"; // Instagram
-    const url = `https://itunes.apple.com/${country}/rss/customerreviews/page=1/id=${appId}/sortby=mostrecent/json`;
     try {
-      const res = await fetch(url, {
-        headers: {
-          "User-Agent": SAFARI_UA,
-          Accept: "application/json",
-          "Accept-Language": "en-US,en;q=0.9",
-        },
-        cache: "no-store",
-        dispatcher: fetchDispatcher(),
-      } as any);
-      const text = await res.text();
-
-      let entryCount: number | string = "n/a";
-      let jsonParsed = false;
+      // Step 1: get the AMP API bearer token from the App Store page.
+      let token = "";
+      let tokenOk = false;
       try {
-        const json = JSON.parse(text);
-        const entry = json?.feed?.entry;
-        entryCount = entry ? (Array.isArray(entry) ? entry.length : 1) : 0;
-        jsonParsed = true;
-      } catch {
-        /* body wasn't JSON */
+        token = await getStorefrontToken(country, appId);
+        tokenOk = true;
+      } catch (e) {
+        return NextResponse.json({
+          store,
+          appId,
+          country,
+          proxy: proxyEnabled(),
+          tokenOk: false,
+          tokenError: e instanceof Error ? e.message : String(e),
+        });
       }
+
+      // Step 2: hit the reviews API with that token.
+      const page = await fetchAmpReviews(appId, country, token, 0, 20);
+      const sample = page.data.slice(0, 2).map((r: any) => ({
+        rating: r?.attributes?.rating,
+        text: String(r?.attributes?.review ?? "").slice(0, 120),
+      }));
 
       return NextResponse.json({
         store,
         appId,
         country,
         proxy: proxyEnabled(),
-        url,
-        upstreamStatus: res.status,
-        ok: res.ok,
-        contentType: res.headers.get("content-type"),
-        bodyLength: text.length,
-        jsonParsed,
-        feedEntryCount: entryCount,
-        bodySnippet: text.slice(0, 900),
+        tokenOk,
+        tokenPreview: token.slice(0, 16) + "…",
+        ampApiStatus: page.status,
+        reviewsOnFirstPage: page.data.length,
+        hasNextPage: page.hasNext,
+        sample,
       });
     } catch (e) {
       return NextResponse.json({
         store,
         appId,
         country,
-        url,
-        fetchError: e instanceof Error ? e.message : String(e),
+        proxy: proxyEnabled(),
+        error: e instanceof Error ? e.message : String(e),
       });
     }
   }
@@ -104,7 +103,7 @@ export async function GET(req: Request) {
       reviewCount: data.length,
       note:
         data.length === 0
-          ? "google-play-scraper returned 0 reviews with no error — this is what a blocked/throttled datacenter IP looks like."
+          ? "google-play-scraper returned 0 reviews with no error — this is what a blocked/throttled IP looks like."
           : "ok",
       sample: data.slice(0, 1).map((r) => ({ score: r.score, text: r.text })),
     });
@@ -117,3 +116,4 @@ export async function GET(req: Request) {
     });
   }
 }
+
