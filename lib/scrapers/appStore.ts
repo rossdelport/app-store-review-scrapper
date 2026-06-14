@@ -139,8 +139,9 @@ export async function fetchAmpReviews(
   limit = 20,
 ): Promise<{ status: number; data: any[]; hasNext: boolean }> {
   const cc = country.toLowerCase();
+  // NB: the "-edge" host works; the plain amp-api host returns 401.
   const url =
-    `https://amp-api.apps.apple.com/v1/catalog/${cc}/apps/${appId}/reviews` +
+    `https://amp-api-edge.apps.apple.com/v1/catalog/${cc}/apps/${appId}/reviews` +
     `?l=en-US&offset=${offset}&limit=${limit}&platform=web` +
     `&additionalPlatforms=appletv,ipad,iphone,mac&sort=mostRecent`;
 
