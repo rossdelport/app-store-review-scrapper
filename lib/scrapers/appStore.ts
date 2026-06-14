@@ -1,3 +1,4 @@
+import { request as undiciRequest } from "undici";
 import type { AppResult, Review } from "../types";
 import { fetchDispatcher } from "../proxy";
 
@@ -143,20 +144,29 @@ export async function fetchAmpReviews(
     `?l=en-US&offset=${offset}&limit=${limit}&platform=web` +
     `&additionalPlatforms=appletv,ipad,iphone,mac&sort=mostRecent`;
 
-  const res = await fetch(
-    url,
-    fetchOpts({
+  // Use undici's request() rather than fetch(): the AMP API requires an
+  // `Origin` header, which the Fetch spec forbids scripts from setting (global
+  // fetch silently drops it, yielding a 401). request() sends it as given.
+  const { statusCode, body } = await undiciRequest(url, {
+    method: "GET",
+    headers: {
       Accept: "application/json",
+      "Accept-Language": "en-US,en;q=0.9",
       Authorization: `Bearer ${token}`,
       Origin: "https://apps.apple.com",
       Referer: "https://apps.apple.com/",
-    }),
-  );
+      "User-Agent": SAFARI_UA,
+    },
+    dispatcher: fetchDispatcher(),
+  });
 
-  if (!res.ok) return { status: res.status, data: [], hasNext: false };
-  const json = await res.json();
+  if (statusCode !== 200) {
+    await body.dump();
+    return { status: statusCode, data: [], hasNext: false };
+  }
+  const json: any = await body.json();
   return {
-    status: res.status,
+    status: statusCode,
     data: Array.isArray(json?.data) ? json.data : [],
     hasNext: Boolean(json?.next),
   };
