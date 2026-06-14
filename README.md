@@ -45,11 +45,18 @@ npm start
 
 | Store | Search | Reviews |
 | ----- | ------ | ------- |
-| App Store | iTunes Search API (`/search`) | Customer-reviews RSS feed (JSON), pages 1–5 |
+| App Store | iTunes Search API (`/search`) | Apple's AMP API (`amp-api-edge.apps.apple.com`), authenticated with a bearer token scraped from the App Store page's JS bundle |
 | Google Play | `google-play-scraper` `search()` | `google-play-scraper` `reviews()` (newest, up to ~150) |
 
 Only the **star rating** and **review text** are kept — that's all that lands
 in the table and the CSV.
+
+> **App Store note:** Apple's old `itunes.apple.com/.../rss/customerreviews`
+> feed now returns an empty feed, so reviews come from the same AMP API the App
+> Store website uses. We load the app's `apps.apple.com` page, pull the bearer
+> token (a JWT) out of its JavaScript bundle, cache it, and call the **`-edge`**
+> reviews host with an `Origin` header (sent via `undici.request`, since the
+> Fetch API forbids setting `Origin`). The plain `amp-api` host returns 401.
 
 ## Deploying & the "No reviews found" gotcha
 
@@ -57,26 +64,25 @@ The store endpoints must be reachable from wherever the app runs, **and the
 host's IP must not be blocked by the store.** This is the #1 source of
 confusion when deploying to a shared cloud platform.
 
-**Why "No reviews found" can happen on Vercel/serverless even though it works
-locally:** Apple and Google aggressively rate-limit and block requests coming
-from datacenter IP ranges. The App Store *search* and Google Play *search*
-endpoints usually still respond, but the **review** endpoints often don't:
+**Why scraping can come back empty on Vercel/serverless even though it works
+locally:** Apple and Google rate-limit and block requests from datacenter IP
+ranges. *Search* usually still responds, but the **review** endpoints are
+pickier:
 
 - **Google Play** review data comes from a `batchexecute` RPC. When that IP is
   throttled, Google returns an empty body and `google-play-scraper` resolves to
-  an **empty array** (it doesn't throw). The app reports "No reviews found".
-- **Apple's** review RSS feed may return `403`/empty from datacenter IPs.
+  an **empty array** (it doesn't throw).
+- **App Store** reviews need a token scraped from `apps.apple.com` plus the AMP
+  reviews API; from flagged datacenter IPs those can be throttled too.
 
-This is **not** a bug in the parser — it's the store declining to serve a
-flagged IP.
+Running locally (a residential IP) sidesteps all of this — which is the simplest
+way to use the app.
 
 ### How to confirm what's happening
 
-- Add `?debug=1` to the request, or check your host's function logs. Each call
-  logs `[reviews] store=… appId=… country=… -> N reviews`. `N = 0` with no
-  error means the store returned nothing (an IP block/throttle), not a crash.
-- Try the **App Store** tab — its RSS feed is often reachable from clouds even
-  when Google Play isn't.
+Add `?debug=1` to a reviews request, or check your host's function logs — each
+call logs `[reviews] store=… appId=… country=… -> N reviews`. `N = 0` with no
+error means the store returned nothing (an IP block/throttle), not a crash.
 
 ### Ways to make it work in production
 
