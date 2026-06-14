@@ -6,13 +6,8 @@ const SAFARI_UA =
   "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 " +
   "(KHTML, like Gecko) Version/16.0 Safari/605.1.15";
 
-/**
- * fetch() options for the *non-blocked* App Store endpoints (iTunes Search and
- * the apps.apple.com page / JS bundle for the token). These run DIRECT — not
- * through the proxy — because Apple's CDN is reachable from cloud hosts, and
- * pushing the 2.3 MB token bundle through a scraping proxy is slow and
- * credit-heavy. Only the reviews API (fetchAmpReviews) uses the proxy.
- */
+/** Direct fetch options — used for iTunes Search, which is reachable from cloud
+ *  hosts without a proxy. */
 function fetchOpts(extraHeaders: Record<string, string> = {}): any {
   return {
     headers: {
@@ -22,6 +17,23 @@ function fetchOpts(extraHeaders: Record<string, string> = {}): any {
     },
     cache: "no-store",
     signal: AbortSignal.timeout(15000),
+  };
+}
+
+/** Proxied fetch options with a generous timeout — used for the apps.apple.com
+ *  page and JS bundle (Apple throttles those from datacenter IPs, so on a cloud
+ *  host they must go through the proxy). The token is fetched once per batch, so
+ *  paying this cost a single time is fine. */
+function proxiedOpts(extraHeaders: Record<string, string> = {}): any {
+  return {
+    headers: {
+      "User-Agent": SAFARI_UA,
+      "Accept-Language": "en-US,en;q=0.9",
+      ...extraHeaders,
+    },
+    cache: "no-store",
+    dispatcher: fetchDispatcher(),
+    signal: AbortSignal.timeout(40000),
   };
 }
 
@@ -94,7 +106,7 @@ export async function findTokenInAssets(
 ): Promise<string> {
   for (const url of collectAssetUrls(html).slice(0, maxFiles)) {
     try {
-      const res = await fetch(url, fetchOpts({ Accept: "*/*" }));
+      const res = await fetch(url, proxiedOpts({ Accept: "*/*" }));
       if (!res.ok) continue;
       const jwt = (await res.text()).match(JWT_RE);
       if (jwt) return jwt[0];
@@ -124,7 +136,7 @@ export async function getStorefrontToken(
   }
 
   const pageUrl = `https://apps.apple.com/${country.toLowerCase()}/app/id${appId}`;
-  const res = await fetch(pageUrl, fetchOpts({ Accept: "text/html" }));
+  const res = await fetch(pageUrl, proxiedOpts({ Accept: "text/html" }));
   if (!res.ok) {
     throw new Error(`Couldn't load the App Store page (HTTP ${res.status})`);
   }
@@ -185,14 +197,17 @@ export async function fetchAmpReviews(
   };
 }
 
-/** Pull reviews (star rating + text) from the App Store's AMP API. */
+/** Pull reviews (star rating + text) from the App Store's AMP API.
+ *  `presetToken` lets the caller pass a token fetched once per batch, so we
+ *  don't re-download the heavy JS bundle for every app/country. */
 export async function reviewsAppStore(
   appId: string,
   country: string,
   max = 120,
+  presetToken?: string,
 ): Promise<Review[]> {
   const cc = country.toLowerCase();
-  const token = await getStorefrontToken(cc, appId);
+  const token = presetToken || (await getStorefrontToken(cc, appId));
 
   const reviews: Review[] = [];
   const seen = new Set<string>();
