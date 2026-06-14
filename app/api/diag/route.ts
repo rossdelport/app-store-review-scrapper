@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { request as undiciRequest } from "undici";
 import { fetchDispatcher, gotProxyAgent, proxyEnabled } from "@/lib/proxy";
 import {
   fetchAmpReviews,
@@ -47,31 +48,42 @@ function decodeJwt(jwt: string): any {
   }
 }
 
-/** Raw reviews API call that reports status + body, for testing a candidate token. */
+/** Test a token against the reviews API two ways: global fetch (which may drop
+ *  the forbidden `Origin` header) vs undici.request (which sends it). */
 async function tryAmp(appId: string, country: string, token: string) {
   const url =
     `https://amp-api.apps.apple.com/v1/catalog/${country}/apps/${appId}/reviews` +
     `?l=en-US&offset=0&limit=10&platform=web` +
     `&additionalPlatforms=appletv,ipad,iphone,mac`;
-  const res = await fetch(url, {
-    headers: {
-      Authorization: `Bearer ${token}`,
-      Origin: "https://apps.apple.com",
-      Referer: "https://apps.apple.com/",
-      "User-Agent": SAFARI_UA,
-      Accept: "application/json",
+  const headers = {
+    Authorization: `Bearer ${token}`,
+    Origin: "https://apps.apple.com",
+    Referer: "https://apps.apple.com/",
+    "User-Agent": SAFARI_UA,
+    Accept: "application/json",
+  };
+  const countOf = (s: string) => {
+    try {
+      return (JSON.parse(s).data || []).length;
+    } catch {
+      return 0;
+    }
+  };
+
+  const f = await fetch(url, { headers, cache: "no-store", dispatcher: fetchDispatcher() } as any);
+  const fBody = await f.text();
+
+  const u = await undiciRequest(url, { method: "GET", headers, dispatcher: fetchDispatcher() });
+  const uBody = await u.body.text();
+
+  return {
+    viaFetch: { status: f.status, count: countOf(fBody) },
+    viaUndici: {
+      status: u.statusCode,
+      count: countOf(uBody),
+      body: uBody.slice(0, 150),
     },
-    cache: "no-store",
-    dispatcher: fetchDispatcher(),
-  } as any);
-  const body = await res.text();
-  let count = 0;
-  try {
-    count = (JSON.parse(body).data || []).length;
-  } catch {
-    /* not json */
-  }
-  return { status: res.status, count, body: body.slice(0, 200) };
+  };
 }
 
 export async function GET(req: Request) {
