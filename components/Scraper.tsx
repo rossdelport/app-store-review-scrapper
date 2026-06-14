@@ -42,6 +42,7 @@ export default function Scraper() {
   const demoRef = useRef(false);
   const collectedRef = useRef<CollectedReview[]>([]);
   const tickRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const tokenPromiseRef = useRef<Promise<string> | null>(null);
 
   useEffect(
     () => () => {
@@ -118,6 +119,32 @@ export default function Scraper() {
   }
 
   // ---- scraping -------------------------------------------------------------
+  // Fetch the App Store token once per batch (shared across all App Store cells).
+  function getAppStoreToken(appId: string): Promise<string> {
+    if (!tokenPromiseRef.current) {
+      const ac = new AbortController();
+      const t = setTimeout(() => ac.abort(), 55000);
+      tokenPromiseRef.current = fetch("/api/token", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ country: "us", appId }),
+        signal: ac.signal,
+      })
+        .then(async (r) => {
+          if (!r.ok) throw new Error(`token HTTP ${r.status}`);
+          const d = await r.json();
+          if (!d.token) throw new Error("no token");
+          return d.token as string;
+        })
+        .finally(() => clearTimeout(t));
+      // If it fails, clear so a later cell can re-try fetching the token.
+      tokenPromiseRef.current.catch(() => {
+        tokenPromiseRef.current = null;
+      });
+    }
+    return tokenPromiseRef.current;
+  }
+
   async function fetchCellReviews(task: { app: AppResult; country: string }, seed: number): Promise<Review[]> {
     if (demoRef.current) {
       await sleep(120 + Math.random() * 500);
@@ -129,29 +156,36 @@ export default function Scraper() {
     let lastErr: unknown;
     for (let attempt = 1; attempt <= ATTEMPTS; attempt++) {
       if (cancelledRef.current) return [];
-      const controller = new AbortController();
-      const timer = setTimeout(() => controller.abort(), 45000); // never hang forever
       try {
-        const res = await fetch("/api/reviews", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            store: task.app.store,
-            appId: task.app.id,
-            country: task.country,
-            max: PER_CELL_MAX,
-          }),
-          signal: controller.signal,
-        });
-        if (res.status === 404) return []; // no reviews for that storefront — fine
-        if (!res.ok) throw new Error(`HTTP ${res.status}`); // 429 / 5xx -> retry
-        const data = await res.json();
-        return data.reviews || [];
+        // App Store cells share one token (fetched once per batch); GP needs none.
+        const token =
+          task.app.store === "appstore" ? await getAppStoreToken(task.app.id) : undefined;
+
+        const controller = new AbortController();
+        const timer = setTimeout(() => controller.abort(), 45000); // never hang forever
+        try {
+          const res = await fetch("/api/reviews", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              store: task.app.store,
+              appId: task.app.id,
+              country: task.country,
+              max: PER_CELL_MAX,
+              token,
+            }),
+            signal: controller.signal,
+          });
+          if (res.status === 404) return []; // no reviews for that storefront — fine
+          if (!res.ok) throw new Error(`HTTP ${res.status}`); // 429 / 5xx -> retry
+          const data = await res.json();
+          return data.reviews || [];
+        } finally {
+          clearTimeout(timer);
+        }
       } catch (e) {
         lastErr = e;
         if (attempt < ATTEMPTS) await sleep(400 * attempt + Math.random() * 300);
-      } finally {
-        clearTimeout(timer);
       }
     }
     throw lastErr;
@@ -169,6 +203,7 @@ export default function Scraper() {
 
     cancelledRef.current = false;
     pausedRef.current = false;
+    tokenPromiseRef.current = null;
     collectedRef.current = [];
     setCollected([]);
     setShowConfig(false);
