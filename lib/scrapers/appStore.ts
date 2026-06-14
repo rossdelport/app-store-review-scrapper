@@ -19,12 +19,6 @@ function fetchOpts(extraHeaders: Record<string, string> = {}): any {
   };
 }
 
-// fetch() options incl. the optional proxy dispatcher (typed loosely because
-// `dispatcher` isn't in the lib DOM RequestInit).
-function fetchOpts(): any {
-  return { headers: baseHeaders, cache: "no-store", dispatcher: fetchDispatcher() };
-}
-
 /** Search the App Store via the public iTunes Search API. */
 export async function searchAppStore(
   term: string,
