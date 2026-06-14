@@ -1,6 +1,13 @@
 import { NextResponse } from "next/server";
 import { fetchDispatcher, gotProxyAgent, proxyEnabled } from "@/lib/proxy";
-import { fetchAmpReviews } from "@/lib/scrapers/appStore";
+import {
+  fetchAmpReviews,
+  collectAssetUrls,
+  extractTokenFromHtml,
+  getStorefrontToken,
+} from "@/lib/scrapers/appStore";
+
+const JWT_RE = /eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+/;
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -29,6 +36,7 @@ export async function GET(req: Request) {
 
   if (store === "appstore") {
     const appId = sp.get("appId") || "389801252"; // Instagram
+    const deep = sp.get("deep") === "1";
     const pageUrl = `https://apps.apple.com/${country}/app/id${appId}`;
     try {
       // Probe the App Store page so we can see where (or whether) the token is.
@@ -43,22 +51,43 @@ export async function GET(req: Request) {
       } as any);
       const html = await pageRes.text();
 
-      const metaMatch = html.match(
-        /<meta[^>]+web-experience-app\/config\/environment[^>]+content="([^"]+)"/,
-      );
-      const jwtMatch = html.match(
-        /eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+/,
-      );
-      const tokenIdx = html.indexOf("token");
+      const assetUrls = collectAssetUrls(html);
 
-      // Best-effort token extraction (same logic the scraper uses).
-      let token = "";
-      if (metaMatch) {
-        const decoded = decodeURIComponent(metaMatch[1]);
-        const t = decoded.match(/"token"\s*:\s*"([^"]+)"/);
-        if (t) token = t[1];
+      // When ?deep=1, scan the JS bundles for the token and report each file.
+      let assets: any = null;
+      if (deep) {
+        const results: any[] = [];
+        for (const url of assetUrls.slice(0, 8)) {
+          try {
+            const r = await fetch(url, {
+              headers: { "User-Agent": SAFARI_UA, Accept: "*/*" },
+              cache: "no-store",
+              dispatcher: fetchDispatcher(),
+            } as any);
+            const body = r.ok ? await r.text() : "";
+            const jwt = body.match(JWT_RE);
+            results.push({
+              url,
+              status: r.status,
+              length: body.length,
+              hasJwt: Boolean(jwt),
+              jwtPreview: jwt ? jwt[0].slice(0, 18) + "…" : null,
+            });
+          } catch (e) {
+            results.push({ url, error: e instanceof Error ? e.message : String(e) });
+          }
+        }
+        assets = { count: assetUrls.length, scanned: results };
       }
-      if (!token && jwtMatch) token = jwtMatch[0];
+
+      // Run the real token logic (HTML, then JS-asset scan) + reviews.
+      let token = "";
+      let tokenError: string | null = null;
+      try {
+        token = await getStorefrontToken(country, appId);
+      } catch (e) {
+        tokenError = e instanceof Error ? e.message : String(e);
+      }
 
       let amp: any = null;
       if (token) {
@@ -84,18 +113,14 @@ export async function GET(req: Request) {
           finalUrl: pageRes.url,
           contentType: pageRes.headers.get("content-type"),
           length: html.length,
-          hasEnvMeta: Boolean(metaMatch),
-          hasMediaApi: html.includes("MEDIA_API"),
-          hasJwt: Boolean(jwtMatch),
-          hasTokenWord: tokenIdx !== -1,
-          headStart: html.slice(0, 220),
-          tokenContext:
-            tokenIdx !== -1
-              ? html.slice(Math.max(0, tokenIdx - 40), tokenIdx + 140)
-              : null,
+          jsAssetCount: assetUrls.length,
+          firstAssets: assetUrls.slice(0, 5),
+          hasInlineToken: Boolean(extractTokenFromHtml(html)),
         },
+        assets,
         tokenFound: Boolean(token),
         tokenPreview: token ? token.slice(0, 16) + "…" : null,
+        tokenError,
         amp,
       });
     } catch (e) {

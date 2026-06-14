@@ -45,16 +45,73 @@ export async function searchAppStore(
   );
 }
 
+const JWT_RE = /eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+/;
+
+/** Pull a token out of the page HTML (older layout: a config meta tag or an
+ *  inline JWT). Returns "" if not present. */
+export function extractTokenFromHtml(html: string): string {
+  const meta = html.match(
+    /<meta[^>]+web-experience-app\/config\/environment[^>]+content="([^"]+)"/,
+  );
+  if (meta) {
+    const decoded = decodeURIComponent(meta[1]);
+    const t = decoded.match(/"token"\s*:\s*"([^"]+)"/);
+    if (t) return t[1];
+  }
+  const jwt = html.match(JWT_RE);
+  return jwt ? jwt[0] : "";
+}
+
+/** Collect the JS asset URLs referenced by an apps.apple.com page. */
+export function collectAssetUrls(html: string): string[] {
+  const urls = new Set<string>();
+  const re = /(?:src|href)="([^"]+\.js[^"]*)"/g;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(html))) {
+    let u = m[1];
+    if (u.startsWith("//")) u = "https:" + u;
+    else if (u.startsWith("/")) u = "https://apps.apple.com" + u;
+    if (u.startsWith("http")) urls.add(u);
+  }
+  return Array.from(urls);
+}
+
+/** Scan a page's JS bundles for the AMP bearer token (a JWT). */
+export async function findTokenInAssets(
+  html: string,
+  maxFiles = 8,
+): Promise<string> {
+  for (const url of collectAssetUrls(html).slice(0, maxFiles)) {
+    try {
+      const res = await fetch(url, fetchOpts({ Accept: "*/*" }));
+      if (!res.ok) continue;
+      const jwt = (await res.text()).match(JWT_RE);
+      if (jwt) return jwt[0];
+    } catch {
+      /* skip unreachable asset */
+    }
+  }
+  return "";
+}
+
+// The token is the same for every app/request, so fetch it once and reuse.
+let cachedToken: { value: string; at: number } | null = null;
+const TOKEN_TTL_MS = 30 * 60 * 1000;
+
 /**
  * The App Store website calls a private "AMP" API for reviews, authenticated
- * with a bearer token embedded in every apps.apple.com page. Fetch an app's
- * page and pull that token out. (The old itunes.apple.com RSS reviews feed now
- * returns an empty feed, so this is the reliable path.)
+ * with a bearer token (a JWT). It used to be embedded in the page HTML; it now
+ * lives in one of the page's JS bundles, so we read the page, then scan its
+ * assets for the token. (The old itunes RSS reviews feed returns empty.)
  */
 export async function getStorefrontToken(
   country: string,
   appId: string,
 ): Promise<string> {
+  if (cachedToken && Date.now() - cachedToken.at < TOKEN_TTL_MS) {
+    return cachedToken.value;
+  }
+
   const pageUrl = `https://apps.apple.com/${country.toLowerCase()}/app/id${appId}`;
   const res = await fetch(pageUrl, fetchOpts({ Accept: "text/html" }));
   if (!res.ok) {
@@ -62,21 +119,14 @@ export async function getStorefrontToken(
   }
   const html = await res.text();
 
-  // Preferred: token sits in a URL-encoded JSON meta tag.
-  const meta = html.match(
-    /<meta[^>]+name="web-experience-app\/config\/environment"[^>]+content="([^"]+)"/,
-  );
-  if (meta) {
-    const decoded = decodeURIComponent(meta[1]);
-    const t = decoded.match(/"token"\s*:\s*"([^"]+)"/);
-    if (t) return t[1];
+  let token = extractTokenFromHtml(html);
+  if (!token) token = await findTokenInAssets(html);
+  if (!token) {
+    throw new Error("Couldn't find the App Store API token (page or assets).");
   }
 
-  // Fallback: grab any JWT-looking string from the page.
-  const jwt = html.match(/eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+/);
-  if (jwt) return jwt[0];
-
-  throw new Error("Couldn't find the App Store API token on the page.");
+  cachedToken = { value: token, at: Date.now() };
+  return token;
 }
 
 /** One page of the AMP reviews API. Returns the raw `data` array + a `next` flag. */
