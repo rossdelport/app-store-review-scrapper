@@ -19,7 +19,7 @@ import ScrapingProgress, {
 } from "./ScrapingProgress";
 
 const PER_CELL_MAX = 50;
-const CONCURRENCY = 6;
+const CONCURRENCY = 5;
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 const selKey = (a: AppResult) => `${a.store}:${a.id}`;
 
@@ -123,20 +123,33 @@ export default function Scraper() {
       await sleep(120 + Math.random() * 500);
       return mockReviews(seed + task.country.charCodeAt(0) + task.country.charCodeAt(1));
     }
-    const res = await fetch("/api/reviews", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        store: task.app.store,
-        appId: task.app.id,
-        country: task.country,
-        max: PER_CELL_MAX,
-      }),
-    });
-    if (res.status === 404) return []; // no reviews for that storefront — that's fine
-    if (!res.ok) throw new Error("request failed");
-    const data = await res.json();
-    return data.reviews || [];
+    // Retry transient failures (proxy timeouts, rotating IPs that get blocked,
+    // rate limits) — each attempt gets a fresh proxy IP, so most recover.
+    const ATTEMPTS = 4;
+    let lastErr: unknown;
+    for (let attempt = 1; attempt <= ATTEMPTS; attempt++) {
+      if (cancelledRef.current) return [];
+      try {
+        const res = await fetch("/api/reviews", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            store: task.app.store,
+            appId: task.app.id,
+            country: task.country,
+            max: PER_CELL_MAX,
+          }),
+        });
+        if (res.status === 404) return []; // no reviews for that storefront — fine
+        if (!res.ok) throw new Error(`HTTP ${res.status}`); // 429 / 5xx -> retry
+        const data = await res.json();
+        return data.reviews || [];
+      } catch (e) {
+        lastErr = e;
+        if (attempt < ATTEMPTS) await sleep(400 * attempt + Math.random() * 300);
+      }
+    }
+    throw lastErr;
   }
 
   async function startScraping(countries: string[]) {
