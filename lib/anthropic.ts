@@ -28,7 +28,6 @@ export async function streamJson<T>(
     system: string;
     user: string;
     schema: Record<string, unknown>;
-    schemaName: string;
     maxTokens: number;
   },
 ): Promise<T> {
@@ -39,7 +38,7 @@ export async function streamJson<T>(
     system: opts.system,
     messages: [{ role: "user", content: opts.user }],
     output_config: {
-      format: { type: "json_schema", name: opts.schemaName, schema: opts.schema },
+      format: { type: "json_schema", schema: opts.schema },
     },
   } as Anthropic.MessageStreamParams);
 

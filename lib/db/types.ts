@@ -30,6 +30,7 @@ export interface ProjectApp {
 export interface ReviewRow {
   id: string;
   project_id: string;
+  upload_id: string | null;
   store: string | null;
   app_id: string | null;
   app_title: string | null;
@@ -37,6 +38,15 @@ export interface ReviewRow {
   rating: number | null;
   text: string;
   source: string | null;
+  created_at: string;
+}
+
+/** An uploaded review file (a deletable batch of reviews). */
+export interface ReviewUpload {
+  id: string;
+  project_id: string;
+  filename: string;
+  review_count: number;
   created_at: string;
 }
 
