@@ -20,10 +20,13 @@ export default function Home() {
         <div className="mx-auto flex max-w-7xl items-center justify-between px-4 py-4 sm:px-6">
           <Logo />
           <nav className="flex items-center gap-5 text-sm font-medium text-slate-500">
+            <a href="/projects" className="hover:text-slate-900">
+              Projects
+            </a>
             <a href="/analyze" className="rounded-lg bg-slate-900 px-3 py-1.5 text-white hover:bg-slate-800">
               Analyze reviews
             </a>
-            <a href="https://github.com/rossdelport/app-store-review-scrapper" target="_blank" rel="noreferrer" className="hover:text-slate-900">
+            <a href="https://github.com/rossdelport/app-store-review-scrapper" target="_blank" rel="noreferrer" className="hidden hover:text-slate-900 sm:inline">
               GitHub ↗
             </a>
           </nav>
