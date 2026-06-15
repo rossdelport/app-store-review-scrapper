@@ -202,27 +202,32 @@ export async function fetchAmpReviews(
   };
 }
 
-/** Pull reviews (star rating + text) from the App Store's AMP API.
- *  `presetToken` lets the caller pass a token fetched once per batch, so we
- *  don't re-download the heavy JS bundle for every app/country. */
+/** Pull a window of reviews from the App Store's AMP API, starting at
+ *  `startOffset`. Returns up to `max` reviews plus a `nextOffset` cursor (null
+ *  when the storefront has no more), so callers can paginate deep across many
+ *  requests without blowing the serverless time limit. `presetToken` lets the
+ *  caller pass a token fetched once per batch. */
 export async function reviewsAppStore(
   appId: string,
   country: string,
   max = 120,
   presetToken?: string,
-): Promise<Review[]> {
+  startOffset = 0,
+): Promise<{ reviews: Review[]; nextOffset: number | null }> {
   const cc = country.toLowerCase();
   const token = presetToken || (await getStorefrontToken(cc, appId));
 
   const reviews: Review[] = [];
   const seen = new Set<string>();
   const limit = 20;
+  let offset = startOffset;
+  let hasMore = false;
 
-  for (let offset = 0; offset < max + limit && reviews.length < max; offset += limit) {
+  for (; offset < startOffset + max + limit && reviews.length < max; offset += limit) {
     const page = await fetchAmpReviews(appId, cc, token, offset, limit);
 
     if (page.status !== 200) {
-      if (offset === 0) {
+      if (offset === startOffset) {
         throw new Error(`App Store reviews API failed (HTTP ${page.status})`);
       }
       break;
@@ -240,8 +245,9 @@ export async function reviewsAppStore(
       added++;
     }
 
+    hasMore = page.hasNext;
     if (!page.hasNext || added === 0) break;
   }
 
-  return reviews;
+  return { reviews, nextOffset: hasMore ? offset : null };
 }

@@ -9,6 +9,7 @@ import type { AnalysisResult, ParsedReview } from "@/lib/analyze/types";
 import type { AnalysisRow, Project, ProjectApp } from "@/lib/db/types";
 import AnalysisColumns from "@/components/analyze/AnalysisColumns";
 import PromptModal from "@/components/analyze/PromptModal";
+import ScrapePanel from "@/components/projects/ScrapePanel";
 import { AppleIcon, PlayIcon, SpinnerIcon } from "@/components/icons";
 
 const REVIEW_PAGE = 1000;
@@ -46,6 +47,15 @@ export default function ProjectDetail({
 
   function touch(supabase: ReturnType<typeof createClient>) {
     return supabase.from("projects").update({ updated_at: new Date().toISOString() }).eq("id", project.id);
+  }
+
+  async function refreshReviewCount() {
+    const supabase = createClient();
+    const { count } = await supabase
+      .from("reviews")
+      .select("*", { count: "exact", head: true })
+      .eq("project_id", project.id);
+    if (typeof count === "number") setReviewCount(count);
   }
 
   // ---- populate reviews via upload -----------------------------------------
@@ -255,6 +265,14 @@ export default function ProjectDetail({
           </button>
         </div>
 
+        <div className="mt-4">
+          <ScrapePanel projectId={project.id} apps={apps} onChange={refreshReviewCount} />
+        </div>
+
+        <div className="my-4 flex items-center gap-3 text-xs text-slate-400">
+          <span className="h-px flex-1 bg-slate-100" /> or upload exports <span className="h-px flex-1 bg-slate-100" />
+        </div>
+
         <div
           onDragOver={(e) => {
             e.preventDefault();
@@ -293,7 +311,7 @@ export default function ProjectDetail({
             )}
           </button>
           <p className="mt-2 text-xs text-slate-400">
-            Scraping reviews straight into a project is coming next — for now, upload CSV/xlsx exports (e.g. ReviewMaxxing).
+            Already have exports? Drop in CSV/xlsx (e.g. ReviewMaxxing) to add them to this project.
           </p>
         </div>
       </div>
