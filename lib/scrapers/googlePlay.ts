@@ -47,11 +47,15 @@ export async function searchGooglePlay(
   );
 }
 
+/** Pull a page of Google Play reviews. Pass `paginationToken` to continue from a
+ *  previous page; returns the reviews plus the `nextToken` cursor (null when
+ *  there are no more), so callers can paginate deep across many requests. */
 export async function reviewsGooglePlay(
   appId: string,
   country: string,
   max = 150,
-): Promise<Review[]> {
+  paginationToken?: string,
+): Promise<{ reviews: Review[]; nextToken: string | null }> {
   const gp = await gplay();
   const res = await gp.reviews({
     appId,
@@ -60,11 +64,16 @@ export async function reviewsGooglePlay(
     country,
     lang: "en",
     throttle: 5,
+    paginate: true,
+    nextPaginationToken: paginationToken,
     requestOptions: requestOptions(),
   });
 
   const data: any[] = Array.isArray(res) ? res : (res?.data ?? []);
-  return data
+  const nextToken: string | null =
+    (res && !Array.isArray(res) ? (res.nextPaginationToken as string | undefined) : undefined) ?? null;
+
+  const reviews = data
     .filter((r) => r && typeof r.text === "string" && r.text.trim().length > 0)
     .map(
       (r): Review => ({
@@ -73,4 +82,5 @@ export async function reviewsGooglePlay(
         text: String(r.text).trim(),
       }),
     );
+  return { reviews, nextToken };
 }
