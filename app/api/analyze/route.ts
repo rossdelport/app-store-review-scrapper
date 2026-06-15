@@ -69,7 +69,6 @@ export async function POST(req: Request) {
         system: ANALYZE_SYSTEM,
         user: `Analyze these ${used.length} reviews:\n\n${formatReviews(chunks[0])}`,
         schema: ANALYSIS_SCHEMA,
-        schemaName: "analysis",
         maxTokens: 8000,
       });
     } else {
@@ -80,7 +79,6 @@ export async function POST(req: Request) {
             system: ANALYZE_SYSTEM,
             user: `Analyze this batch (${i + 1}/${chunks.length}) of ${c.length} reviews:\n\n${formatReviews(c)}`,
             schema: ANALYSIS_SCHEMA,
-            schemaName: "analysis",
             maxTokens: 6000,
           }),
         ),
@@ -90,7 +88,6 @@ export async function POST(req: Request) {
         system: CONSOLIDATE_SYSTEM,
         user: `Merge these ${partials.length} partial analyses into one:\n\n${JSON.stringify(partials)}`,
         schema: ANALYSIS_SCHEMA,
-        schemaName: "analysis",
         maxTokens: 8000,
       });
     }

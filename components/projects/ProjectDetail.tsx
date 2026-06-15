@@ -1,16 +1,16 @@
 "use client";
 
 /* eslint-disable @next/next/no-img-element */
-import { useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { createClient } from "@/lib/supabase/client";
 import { parseFile, isSupportedReviewFile } from "@/lib/analyze/parseFile";
 import type { AnalysisResult, ParsedReview } from "@/lib/analyze/types";
-import type { AnalysisRow, Project, ProjectApp } from "@/lib/db/types";
+import type { AnalysisRow, Project, ProjectApp, ReviewUpload } from "@/lib/db/types";
 import AnalysisColumns from "@/components/analyze/AnalysisColumns";
 import PromptModal from "@/components/analyze/PromptModal";
 import ScrapePanel from "@/components/projects/ScrapePanel";
-import { AppleIcon, PlayIcon, SpinnerIcon } from "@/components/icons";
+import { AppleIcon, PlayIcon, SpinnerIcon, CloseIcon } from "@/components/icons";
 
 const REVIEW_PAGE = 1000;
 const REVIEW_CAP = 12000; // analysis samples down to ~9.6k anyway
@@ -40,6 +40,8 @@ export default function ProjectDetail({
   const [analyzing, setAnalyzing] = useState(false);
   const [generating, setGenerating] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [uploads, setUploads] = useState<ReviewUpload[]>([]);
+  const [untrackedCount, setUntrackedCount] = useState(0);
   const inputRef = useRef<HTMLInputElement>(null);
 
   const target = apps.find((a) => a.is_target) ?? apps[0];
@@ -58,6 +60,57 @@ export default function ProjectDetail({
     if (typeof count === "number") setReviewCount(count);
   }
 
+  // Uploaded files (deletable batches) + any reviews uploaded before tracking.
+  const loadUploads = useCallback(async () => {
+    const supabase = createClient();
+    const { data } = await supabase
+      .from("review_uploads")
+      .select("id,project_id,filename,review_count,created_at")
+      .eq("project_id", project.id)
+      .order("created_at", { ascending: false });
+    setUploads((data as ReviewUpload[]) ?? []);
+    const { count } = await supabase
+      .from("reviews")
+      .select("*", { count: "exact", head: true })
+      .eq("project_id", project.id)
+      .eq("source", "upload")
+      .is("upload_id", null);
+    setUntrackedCount(count ?? 0);
+  }, [project.id]);
+
+  useEffect(() => {
+    loadUploads();
+  }, [loadUploads]);
+
+  async function deleteUpload(id: string) {
+    const supabase = createClient();
+    const { error: e } = await supabase.from("review_uploads").delete().eq("id", id);
+    if (e) {
+      setError(e.message);
+      return;
+    }
+    await touch(supabase);
+    await refreshReviewCount();
+    await loadUploads();
+  }
+
+  async function clearUntracked() {
+    const supabase = createClient();
+    const { error: e } = await supabase
+      .from("reviews")
+      .delete()
+      .eq("project_id", project.id)
+      .eq("source", "upload")
+      .is("upload_id", null);
+    if (e) {
+      setError(e.message);
+      return;
+    }
+    await touch(supabase);
+    await refreshReviewCount();
+    await loadUploads();
+  }
+
   // ---- populate reviews via upload -----------------------------------------
   async function addFiles(list: FileList | File[]) {
     setError(null);
@@ -65,34 +118,48 @@ export default function ProjectDetail({
     if (incoming.length === 0) return;
     setUploading(true);
     try {
-      const parsed: ParsedReview[] = [];
+      const supabase = createClient();
+      let added = 0;
+      // Each file becomes its own upload batch, so it can be listed and deleted.
       for (const f of incoming) {
+        let reviews: ParsedReview[] = [];
         try {
-          parsed.push(...(await parseFile(f)));
+          reviews = await parseFile(f);
         } catch {
-          /* skip unreadable file */
+          continue; // skip unreadable file
         }
+        if (reviews.length === 0) continue;
+
+        const { data: up, error: upErr } = await supabase
+          .from("review_uploads")
+          .insert({ project_id: project.id, filename: f.name, review_count: reviews.length })
+          .select("id")
+          .single();
+        if (upErr) throw upErr;
+
+        for (let i = 0; i < reviews.length; i += INSERT_BATCH) {
+          const chunk = reviews.slice(i, i + INSERT_BATCH).map((r) => ({
+            project_id: project.id,
+            upload_id: up.id,
+            store: r.store ?? null,
+            app_title: r.app ?? null,
+            country: r.country ?? null,
+            rating: r.rating ?? null,
+            text: r.text,
+            source: "upload",
+          }));
+          const { error: e } = await supabase.from("reviews").insert(chunk);
+          if (e) throw e;
+        }
+        added += reviews.length;
       }
-      if (parsed.length === 0) {
+      if (added === 0) {
         setError("Couldn't read any reviews from those files. Upload CSV or Excel (.xlsx) exports with a review/text column.");
         return;
       }
-      const supabase = createClient();
-      for (let i = 0; i < parsed.length; i += INSERT_BATCH) {
-        const chunk = parsed.slice(i, i + INSERT_BATCH).map((r) => ({
-          project_id: project.id,
-          store: r.store ?? null,
-          app_title: r.app ?? null,
-          country: r.country ?? null,
-          rating: r.rating ?? null,
-          text: r.text,
-          source: "upload",
-        }));
-        const { error: e } = await supabase.from("reviews").insert(chunk);
-        if (e) throw e;
-      }
       await touch(supabase);
-      setReviewCount((n) => n + parsed.length);
+      await refreshReviewCount();
+      await loadUploads();
     } catch (e) {
       setError(e instanceof Error ? e.message : "Upload failed.");
     } finally {
@@ -314,6 +381,46 @@ export default function ProjectDetail({
             Already have exports? Drop in CSV/xlsx (e.g. ReviewMaxxing) to add them to this project.
           </p>
         </div>
+
+        {(uploads.length > 0 || untrackedCount > 0) && (
+          <div className="mt-4 space-y-2">
+            <h3 className="text-xs font-semibold uppercase tracking-wide text-slate-400">Uploaded files</h3>
+            {uploads.map((u) => (
+              <div
+                key={u.id}
+                className="flex items-center justify-between rounded-xl border border-slate-200 bg-white px-4 py-2.5"
+              >
+                <div className="min-w-0">
+                  <p className="truncate text-sm font-medium text-slate-800">{u.filename}</p>
+                  <p className="text-xs text-slate-400">{u.review_count.toLocaleString()} reviews</p>
+                </div>
+                <button
+                  onClick={() => deleteUpload(u.id)}
+                  title="Delete this upload"
+                  className="rounded-lg p-1 text-slate-400 hover:bg-slate-100 hover:text-red-600"
+                >
+                  <CloseIcon className="h-4 w-4" />
+                </button>
+              </div>
+            ))}
+            {untrackedCount > 0 && (
+              <div className="flex items-center justify-between rounded-xl border border-slate-200 bg-white px-4 py-2.5">
+                <div className="min-w-0">
+                  <p className="truncate text-sm font-medium text-slate-800">Earlier uploads</p>
+                  <p className="text-xs text-slate-400">
+                    {untrackedCount.toLocaleString()} reviews added before file tracking
+                  </p>
+                </div>
+                <button
+                  onClick={clearUntracked}
+                  className="rounded-lg border border-slate-200 px-2.5 py-1 text-xs font-medium text-slate-600 hover:bg-slate-50 hover:text-red-600"
+                >
+                  Clear
+                </button>
+              </div>
+            )}
+          </div>
+        )}
       </div>
 
       {error && (
