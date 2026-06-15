@@ -22,8 +22,8 @@ countries into one CSV**.
 
 ### Analyze reviews → build spec (`/analyze`)
 
-- 📤 **Upload** one or many review CSVs (ReviewMaxxing exports, this app's CSV, or
-  any CSV with a review/rating column).
+- 📤 **Upload** one or many review files — CSV or Excel (`.xlsx`) — (ReviewMaxxing
+  exports, this app's CSV, or any sheet with a review/rating column).
 - 🧠 **Cluster** them with **Claude (Opus 4.8)** into three columns — **Love**,
   **Want Added**, **Don't Need** — each with themes, frequency, and example quotes.
 - 📝 **Generate prompt + context** — produce a massive, copy-paste build

@@ -1,7 +1,7 @@
 "use client";
 
 import { useRef, useState } from "react";
-import { parseReviewsCsv } from "@/lib/analyze/csv";
+import { parseReviewsCsv, rowsToReviews } from "@/lib/analyze/csv";
 import type { AnalysisResult, Bucket, ParsedReview } from "@/lib/analyze/types";
 import { BUCKET_META } from "@/lib/analyze/types";
 import { SpinnerIcon, DownloadIcon, CloseIcon, CheckIcon } from "@/components/icons";
@@ -29,6 +29,24 @@ const ACCENT: Record<string, { head: string; chip: string; card: string }> = {
   },
 };
 
+// Excel (.xlsx). The legacy binary .xls format isn't supported by the parser.
+const EXCEL_RE = /\.xlsx$/i;
+
+/** Read one uploaded file into review rows — CSV/TXT directly, or .xlsx by
+ *  pulling the first sheet's rows through the same column-detection logic.
+ *  The Excel parser is loaded on demand so it stays out of the initial bundle. */
+async function parseFile(file: File): Promise<ParsedReview[]> {
+  if (EXCEL_RE.test(file.name)) {
+    const { default: readXlsxFile } = await import("read-excel-file");
+    const rows = await readXlsxFile(file);
+    const asStrings = rows.map((row) =>
+      row.map((cell) => (cell == null ? "" : String(cell))),
+    );
+    return rowsToReviews(asStrings);
+  }
+  return parseReviewsCsv(await file.text());
+}
+
 export default function AnalyzeApp() {
   const [files, setFiles] = useState<UploadedFile[]>([]);
   const [appName, setAppName] = useState("");
@@ -49,19 +67,20 @@ export default function AnalyzeApp() {
 
   async function addFiles(list: FileList | File[]) {
     setError(null);
-    const incoming = Array.from(list).filter((f) => /\.csv$|text\/csv|\.txt$/i.test(f.name + " " + f.type));
+    const incoming = Array.from(list).filter(
+      (f) => /\.(csv|txt|xlsx)$/i.test(f.name) || /(csv|excel|spreadsheet)/i.test(f.type),
+    );
     const parsed: UploadedFile[] = [];
     for (const f of incoming) {
       try {
-        const text = await f.text();
-        const reviews = parseReviewsCsv(text);
+        const reviews = await parseFile(f);
         if (reviews.length > 0) parsed.push({ name: f.name, reviews });
       } catch {
         /* skip unreadable file */
       }
     }
     if (parsed.length === 0) {
-      setError("Couldn't read any reviews from those files. Upload CSV exports with a review/text column.");
+      setError("Couldn't read any reviews from those files. Upload CSV or Excel (.xlsx) exports with a review/text column.");
       return;
     }
     setFiles((prev) => {
@@ -181,13 +200,13 @@ export default function AnalyzeApp() {
         <input
           ref={inputRef}
           type="file"
-          accept=".csv,text/csv,.txt"
+          accept=".csv,.txt,.xlsx,text/csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
           multiple
           className="hidden"
           onChange={(e) => e.target.files && addFiles(e.target.files)}
         />
         <p className="text-sm text-slate-600">
-          Drag &amp; drop your downloaded review CSVs here, or
+          Drag &amp; drop your downloaded review files (CSV or Excel) here, or
         </p>
         <button
           onClick={() => inputRef.current?.click()}
@@ -196,7 +215,7 @@ export default function AnalyzeApp() {
           {files.length ? "Add more files" : "Choose files"}
         </button>
         <p className="mt-2 text-xs text-slate-400">
-          Works with ReviewMaxxing exports, our CSV, or any CSV with a review/rating column.
+          Works with ReviewMaxxing exports, our CSV, Excel (.xlsx), or any CSV with a review/rating column.
         </p>
       </div>
 

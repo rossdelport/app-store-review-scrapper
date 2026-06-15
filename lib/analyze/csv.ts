@@ -66,10 +66,11 @@ function findCol(headers: string[], names: string[]): number {
   return -1;
 }
 
-/** Turn raw CSV text into review rows. Auto-detects the review-text and rating
- *  columns, tolerating different export formats (e.g. ReviewMaxxing or ours). */
-export function parseReviewsCsv(text: string): ParsedReview[] {
-  const rows = parseCsv(text);
+/** Turn already-parsed rows (from CSV or an Excel sheet) into review records.
+ *  Auto-detects the review-text and rating columns, tolerating different export
+ *  formats (e.g. ReviewMaxxing or ours). */
+export function rowsToReviews(rawRows: string[][]): ParsedReview[] {
+  const rows = rawRows.filter((r) => r.some((c) => (c ?? "").trim() !== ""));
   if (rows.length === 0) return [];
 
   const header = rows[0];
@@ -117,4 +118,9 @@ export function parseReviewsCsv(text: string): ParsedReview[] {
     });
   }
   return out;
+}
+
+/** Turn raw CSV text into review rows. */
+export function parseReviewsCsv(text: string): ParsedReview[] {
+  return rowsToReviews(parseCsv(text));
 }
