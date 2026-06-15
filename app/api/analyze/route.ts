@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { getAnthropic, streamJson, ANALYSIS_SCHEMA } from "@/lib/anthropic";
+import { getAnthropic, streamJson, ANALYSIS_SCHEMA, ANALYSIS_MODEL } from "@/lib/anthropic";
 import type { AnalysisResult, ParsedReview } from "@/lib/analyze/types";
 
 export const runtime = "nodejs";
@@ -99,6 +99,7 @@ export async function POST(req: Request) {
       analysis: result,
       reviewCount: reviews.length,
       analyzed: used.length,
+      model: ANALYSIS_MODEL,
     });
   } catch (e) {
     const msg = e instanceof Error ? e.message : "Analysis failed.";

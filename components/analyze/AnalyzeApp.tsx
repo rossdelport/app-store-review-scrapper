@@ -1,50 +1,15 @@
 "use client";
 
 import { useRef, useState } from "react";
-import { parseReviewsCsv, rowsToReviews } from "@/lib/analyze/csv";
-import type { AnalysisResult, Bucket, ParsedReview } from "@/lib/analyze/types";
-import { BUCKET_META } from "@/lib/analyze/types";
-import { SpinnerIcon, DownloadIcon, CloseIcon, CheckIcon } from "@/components/icons";
+import { parseFile, isSupportedReviewFile } from "@/lib/analyze/parseFile";
+import type { AnalysisResult, ParsedReview } from "@/lib/analyze/types";
+import { SpinnerIcon, CloseIcon } from "@/components/icons";
+import AnalysisColumns from "@/components/analyze/AnalysisColumns";
+import PromptModal from "@/components/analyze/PromptModal";
 
 interface UploadedFile {
   name: string;
   reviews: ParsedReview[];
-}
-
-const ACCENT: Record<string, { head: string; chip: string; card: string }> = {
-  emerald: {
-    head: "text-emerald-700",
-    chip: "bg-emerald-100 text-emerald-700",
-    card: "border-emerald-200",
-  },
-  blue: {
-    head: "text-blue-700",
-    chip: "bg-blue-100 text-blue-700",
-    card: "border-blue-200",
-  },
-  slate: {
-    head: "text-slate-600",
-    chip: "bg-slate-200 text-slate-600",
-    card: "border-slate-200",
-  },
-};
-
-// Excel (.xlsx). The legacy binary .xls format isn't supported by the parser.
-const EXCEL_RE = /\.xlsx$/i;
-
-/** Read one uploaded file into review rows — CSV/TXT directly, or .xlsx by
- *  pulling the first sheet's rows through the same column-detection logic.
- *  The Excel parser is loaded on demand so it stays out of the initial bundle. */
-async function parseFile(file: File): Promise<ParsedReview[]> {
-  if (EXCEL_RE.test(file.name)) {
-    const { default: readXlsxFile } = await import("read-excel-file");
-    const rows = await readXlsxFile(file);
-    const asStrings = rows.map((row) =>
-      row.map((cell) => (cell == null ? "" : String(cell))),
-    );
-    return rowsToReviews(asStrings);
-  }
-  return parseReviewsCsv(await file.text());
 }
 
 export default function AnalyzeApp() {
@@ -59,7 +24,6 @@ export default function AnalyzeApp() {
 
   const [generating, setGenerating] = useState(false);
   const [prompt, setPrompt] = useState<string | null>(null);
-  const [copied, setCopied] = useState(false);
 
   const inputRef = useRef<HTMLInputElement>(null);
 
@@ -67,9 +31,7 @@ export default function AnalyzeApp() {
 
   async function addFiles(list: FileList | File[]) {
     setError(null);
-    const incoming = Array.from(list).filter(
-      (f) => /\.(csv|txt|xlsx)$/i.test(f.name) || /(csv|excel|spreadsheet)/i.test(f.type),
-    );
+    const incoming = Array.from(list).filter(isSupportedReviewFile);
     const parsed: UploadedFile[] = [];
     for (const f of incoming) {
       try {
@@ -135,27 +97,6 @@ export default function AnalyzeApp() {
     } finally {
       setGenerating(false);
     }
-  }
-
-  function copyPrompt() {
-    if (!prompt) return;
-    navigator.clipboard.writeText(prompt).then(() => {
-      setCopied(true);
-      setTimeout(() => setCopied(false), 2000);
-    });
-  }
-
-  function downloadPrompt() {
-    if (!prompt) return;
-    const blob = new Blob([prompt], { type: "text/markdown;charset=utf-8;" });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = `${(appName || "app").toLowerCase().replace(/[^a-z0-9]+/g, "-") || "app"}-build-spec.md`;
-    document.body.appendChild(a);
-    a.click();
-    a.remove();
-    URL.revokeObjectURL(url);
   }
 
   function startOver() {
@@ -304,81 +245,13 @@ export default function AnalyzeApp() {
             </div>
           </div>
 
-          <div className="grid gap-4 lg:grid-cols-3">
-            {(Object.keys(BUCKET_META) as Bucket[]).map((bucket) => {
-              const meta = BUCKET_META[bucket];
-              const accent = ACCENT[meta.accent];
-              const items = analysis[bucket] || [];
-              return (
-                <section key={bucket} className="rounded-2xl border border-slate-200 bg-white p-4">
-                  <div className="mb-3">
-                    <h3 className={`text-sm font-bold uppercase tracking-wide ${accent.head}`}>{meta.label}</h3>
-                    <p className="text-xs text-slate-400">{meta.blurb}</p>
-                  </div>
-                  <div className="space-y-3">
-                    {items.length === 0 && <p className="text-sm text-slate-400">Nothing notable.</p>}
-                    {items.map((it, i) => (
-                      <div key={i} className={`rounded-xl border bg-white p-3 ${accent.card}`}>
-                        <div className="flex items-start justify-between gap-2">
-                          <p className="text-sm font-semibold text-slate-900">{it.title}</p>
-                          <span className={`shrink-0 rounded px-1.5 py-0.5 text-[10px] font-medium uppercase ${accent.chip}`}>
-                            {it.frequency}
-                          </span>
-                        </div>
-                        <p className="mt-1 text-sm text-slate-600">{it.detail}</p>
-                        {it.examples?.length > 0 && (
-                          <ul className="mt-2 space-y-1">
-                            {it.examples.slice(0, 3).map((ex, j) => (
-                              <li key={j} className="border-l-2 border-slate-200 pl-2 text-xs italic text-slate-500">
-                                “{ex}”
-                              </li>
-                            ))}
-                          </ul>
-                        )}
-                      </div>
-                    ))}
-                  </div>
-                </section>
-              );
-            })}
-          </div>
+          <AnalysisColumns analysis={analysis} />
         </div>
       )}
 
       {/* Generated prompt modal */}
       {prompt && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
-          <div className="absolute inset-0 bg-slate-900/50 backdrop-blur-sm" onClick={() => setPrompt(null)} />
-          <div className="relative z-10 flex max-h-[88vh] w-full max-w-3xl flex-col overflow-hidden rounded-2xl bg-white shadow-2xl">
-            <div className="flex items-center justify-between border-b border-slate-100 px-5 py-3">
-              <div>
-                <h2 className="text-base font-semibold text-slate-900">Build spec for Claude Code</h2>
-                <p className="text-xs text-slate-400">{prompt.length.toLocaleString()} characters — paste this into Claude Code</p>
-              </div>
-              <div className="flex items-center gap-2">
-                <button
-                  onClick={copyPrompt}
-                  className="inline-flex items-center gap-1.5 rounded-lg bg-slate-900 px-3 py-1.5 text-sm font-semibold text-white hover:bg-slate-800"
-                >
-                  {copied ? <CheckIcon className="h-4 w-4" /> : null}
-                  {copied ? "Copied" : "Copy"}
-                </button>
-                <button
-                  onClick={downloadPrompt}
-                  className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 px-3 py-1.5 text-sm font-medium text-slate-700 hover:bg-slate-50"
-                >
-                  <DownloadIcon className="h-4 w-4" /> .md
-                </button>
-                <button onClick={() => setPrompt(null)} className="rounded-lg p-1.5 text-slate-400 hover:bg-slate-100">
-                  <CloseIcon className="h-5 w-5" />
-                </button>
-              </div>
-            </div>
-            <pre className="scroll-thin overflow-auto whitespace-pre-wrap p-5 text-sm leading-relaxed text-slate-800">
-              {prompt}
-            </pre>
-          </div>
-        </div>
+        <PromptModal prompt={prompt} filenameBase={appName || "app"} onClose={() => setPrompt(null)} />
       )}
     </div>
   );
